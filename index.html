@@ -559,6 +559,18 @@ let touchGas = false, touchBrake = false;
   press($('btnAct'), () => { if (player.car) touchGas = true; else { keys.Fire = true; once.Fire = true; } }, () => { touchGas = false; keys.Fire = false; });
   press($('btnWeapon'), () => { once.KeyR = true; });
   press($('btnAim'), () => { touchAim = !touchAim; $('btnAim').classList.toggle('on', touchAim); });
+  {  // slide the thumb while holding Fire to keep aiming (same sensitivity as the look zone)
+    const fb = $('btnAct'); let pid = null, px = 0, py = 0;
+    fb.addEventListener('pointerdown', e => { pid = e.pointerId; px = e.clientX; py = e.clientY; });
+    fb.addEventListener('pointermove', e => {
+      if (e.pointerId !== pid || player.car) return;
+      const s = lookSens();
+      yaw -= (e.clientX - px) * 0.0058 * s; pitch = clamp(pitch + (e.clientY - py) * 0.0046 * s, -0.4, 1.3);
+      px = e.clientX; py = e.clientY; lastLook = performance.now(); lastTouch = performance.now();
+    });
+    const fend = e => { if (e.pointerId === pid) pid = null; };
+    fb.addEventListener('pointerup', fend); fb.addEventListener('pointercancel', fend);
+  }
   press($('btnWave'), () => { if (player.car) touchBrake = true; else once.KeyH = true; }, () => { touchBrake = false; });
   press($('btnCar'),  () => { once.KeyF = true; });
   document.addEventListener('contextmenu', e => { if (TOUCH) e.preventDefault(); });
