@@ -81,6 +81,10 @@
   #hurt{inset:0;background:radial-gradient(ellipse at center, rgba(180,0,0,0) 42%, rgba(200,10,10,.8) 100%);opacity:0}
   #wasted{inset:0;display:none;align-items:center;justify-content:center;font-size:clamp(40px,11vw,120px);font-weight:900;letter-spacing:.14em;color:#c9372c;background:rgba(0,0,0,.45);text-shadow:0 4px 24px #000}
   #wasted.show{display:flex}
+  #arrest{left:50%;bottom:64px;transform:translateX(-50%);width:min(220px,52vw);display:none;text-align:center;font-size:12px;font-weight:800;letter-spacing:.14em;color:#8fb0ff;text-shadow:0 1px 4px #000}
+  #arrest.on{display:block}
+  #arrestBar{height:9px;margin-top:3px;background:rgba(0,0,0,.55);border:1px solid rgba(255,255,255,.4);border-radius:5px;overflow:hidden}
+  #arrestFill{height:100%;width:0;background:#4d7bff}
   #toast{left:50%;top:24%;transform:translateX(-50%);font-size:clamp(18px,3.8vw,32px);font-weight:800;opacity:0;transition:opacity .25s;text-shadow:0 2px 12px #000;white-space:nowrap}
   #toast.show{opacity:1}
   #carname{left:50%;top:max(12px,env(safe-area-inset-top,0px));transform:translateX(-50%);font-size:clamp(16px,3vw,26px);font-weight:800;letter-spacing:.06em;color:#fff;text-shadow:0 2px 10px #000;background:rgba(10,13,18,.55);padding:4px 14px;border-radius:8px;opacity:0;transition:opacity .4s;white-space:nowrap;pointer-events:none}
@@ -161,6 +165,7 @@
 <div id="money" class="hud"><span id="moneyAmt">$00000500</span><span id="moneyDelta"></span></div>
 <div id="wanted" class="hud"><span class="st">&#9733;</span><span class="st">&#9733;</span><span class="st">&#9733;</span><span class="st">&#9733;</span><span class="st">&#9733;</span></div>
 <div id="sirenfx" class="hud"></div>
+<div id="arrest" class="hud">BEING ARRESTED<div id="arrestBar"><div id="arrestFill"></div></div></div>
 <div id="fade" class="hud"></div>
 <div id="shopui" class="hud">
   <div class="shopHead"><b>CHEAP PETE'S GUNS</b><span id="shopMoney"></span></div>
@@ -632,10 +637,10 @@ function aiStep(car, dt){
   const px = car.x, pz = car.z, m = car.v*dt;
   if (ai.axis==='x'){
     car.x += ai.dir*m; car.z += (c(ai.road)+LANE*ai.dir - car.z) * Math.min(1, dt*2.6);
-    if (ai.dir*(car.x - c(ai.next)) >= 0) aiTurn(car);
+    if (ai.dir*(car.x - c(ai.next)) >= 0) (car.cop ? copTurn : aiTurn)(car);
   } else {
     car.z += ai.dir*m; car.x += (c(ai.road)-LANE*ai.dir - car.x) * Math.min(1, dt*2.6);
-    if (ai.dir*(car.z - c(ai.next)) >= 0) aiTurn(car);
+    if (ai.dir*(car.z - c(ai.next)) >= 0) (car.cop ? copTurn : aiTurn)(car);
   }
   const vx = (car.x-px)/dt, vz = (car.z-pz)/dt;
   if (vx*vx+vz*vz > 0.5) car.h += angDiff(car.h, Math.atan2(vx, vz)) * Math.min(1, dt*6);
@@ -1508,6 +1513,7 @@ function hurtCar(car, dmg, pt, dir, byPlayer){
 function blowUp(car){
   const x = car.x, z = car.z, R = 9, wasPlayer = car.mode === 'player';
   if (wasPlayer) exitCar();
+  if (car.cop) dropCopCar(car);
   car.wrecked = true; car.burning = false; car.hp = -999; car.smoke = 2; car.burnOut = 45; car.mode = 'parked'; car.ai = null; car.v = 0;
   car.pitch = (Math.random() - 0.5)*0.3; car.roll = (Math.random() - 0.5)*0.5; car.vx = car.vz = undefined;
   tintCar(car);
@@ -1967,8 +1973,9 @@ function makeMember(gltf, g, x, z, kind, leader){
 // Crimes add heat; heat sets the star level; cops are a pool of gang-style members (blue, 'cop' group) that are
 // pulled out of the pool behind you and chase you. Break line of sight for a while and the heat dies down.
 let COPG = null;
-const wanted = {heat:0, stars:0, unseen:0, spawnT:0, sirenT:0, clearT:0, seen:false, shownStars:-1, shownSearch:null};
-const HEAT_AT = [0, 20, 60, 120, 200, 300], COPS_AT = [0, 2, 3, 5, 7, 9];
+const wanted = {heat:0, stars:0, unseen:0, spawnT:0, sirenT:0, clearT:0, seen:false, shownStars:-1, shownSearch:null, hostileT:0, grabT:0, carT:0};
+const HEAT_AT = [0, 20, 60, 120, 200, 300], COPS_AT = [0, 2, 4, 6, 8, 9], FOOT_AT = [0, 2, 2, 2, 2, 2], CARS_AT = [0, 0, 1, 2, 3, 3];
+function copShoots(){ return wanted.stars >= 3 || wanted.hostileT > 0; }   // one or two stars: cops try to arrest you instead of shooting
 function starsOf(h){ let n = 0; for (let i=1;i<HEAT_AT.length;i++) if (h >= HEAT_AT[i]) n = i; return n; }
 function addCrime(pts){ if (player.dead || !(pts > 0)) return; wanted.heat = Math.min(360, wanted.heat + pts); wanted.unseen = 0; wanted.clearT = 0; }
 function parkCop(m){
@@ -1980,9 +1987,59 @@ function activateCop(m, x, z){
   m.tilt = 0; m.clone.rotation.x = 0; m.clone.position.y = 0; m.stun = 0; m.burst = 0; m.fireCd = 0.8 + Math.random(); m.los = false; m.losT = 0;
   m.x = x; m.z = z; m.lx = x; m.lz = z; m.y = groundH(x, z); m.wrap.position.set(x, m.y, z); m.wrap.visible = true;
 }
+// ---- police cars: they follow the road grid towards you, then stop and the cops inside get out
+const copCars = [];
+function copTurn(car){
+  const ai = car.ai, k = ai.next, d = ai.dir, road = ai.road, X = ai.axis === 'x', opts = [];
+  if (k + d >= 0 && k + d <= N) opts.push({p:'s', x: X ? c(k + d) : c(road), z: X ? c(road) : c(k + d)});
+  if (road + 1 <= N) opts.push({p:'p', x: X ? c(k) : c(road + 1), z: X ? c(road + 1) : c(k)});
+  if (road - 1 >= 0) opts.push({p:'m', x: X ? c(k) : c(road - 1), z: X ? c(road - 1) : c(k)});
+  const tx = player.car ? player.car.x : player.x, tz = player.car ? player.car.z : player.z;
+  let best = opts[0], bs = 1e9;
+  for (const o of opts){ const sc = Math.hypot(o.x - tx, o.z - tz) + Math.random()*6; if (sc < bs){ bs = sc; best = o; } }
+  if (best.p === 's'){ ai.next = k + d; return; }
+  const nd = best.p === 'p' ? 1 : -1;
+  ai.axis = X ? 'z' : 'x'; ai.next = road + nd; ai.road = k; ai.dir = nd; car.turn = 1.0;
+}
+function spawnCopCar(){
+  let car = copCars.find(q => !q.copActive && !q.wrecked);
+  if (!car){
+    if (copCars.length >= 4) return null;
+    const type = CAR_TYPES.sedan && CAR_TYPES.sedan.scene ? CAR_TYPES.sedan : ALL_CAR_TYPES.find(t => t.scene);
+    if (!type) return null;
+    car = addCar(type, 0, 0, 0, 'ai', 0x1b3a8a); car.color = 0x1b3a8a; car.cop = true;
+    const roof = new THREE.Box3().setFromObject(car.g).max.y - car.g.position.y;
+    const bar = new THREE.Group(); bar.position.set(0, Math.max(1.2, roof) + 0.03, -0.1);
+    const mk = (x, col) => { const m = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.16, 0.3), new THREE.MeshBasicMaterial({color:col})); m.position.x = x; bar.add(m); return m; };
+    car.lbL = mk(-0.3, 0x2b5bff); car.lbR = mk(0.3, 0xff2b2b); car.g.add(bar); car.bar = bar;
+    copCars.push(car);
+  } else if (!cars.includes(car)) cars.push(car);
+  for (let tries = 0; tries < 40; tries++){
+    aiPlace(car, Math.random() < 0.5 ? 'x' : 'z', Math.floor(Math.random()*(N + 1)), Math.random() < 0.5 ? 1 : -1, Math.floor(Math.random()*N));
+    const d = Math.hypot(car.x - player.x, car.z - player.z);
+    if (d > 70 && d < 150 && ((car.x - player.x)*(-Math.sin(yaw)) + (car.z - player.z)*(-Math.cos(yaw)))/d < 0.3) break;     // out of sight, not in front of the camera
+  }
+  car.copActive = true; car.deployed = false; car.hp = CAR_HP; car.burning = false; car.smoke = 0; car.retireT = 20; car.g.visible = true; car.bar.visible = true;
+  return car;
+}
+function retireCopCar(car){
+  car.copActive = false; car.mode = 'parked'; car.ai = null; car.v = 0; car.g.visible = false;
+  const i = cars.indexOf(car); if (i >= 0) cars.splice(i, 1);
+}
+function dropCopCar(car){ const i = copCars.indexOf(car); if (i >= 0) copCars.splice(i, 1); car.copActive = false; }   // stolen or blown up: no longer managed
+function deployCops(car){
+  car.deployed = true; car.mode = 'parked'; car.ai = null;
+  const fx = Math.sin(car.h), fz = Math.cos(car.h); let n = 0;
+  for (const m of COPG.members){
+    if (n >= 2) break;
+    if (!m.alive && (m.parked || m.dead > 8)){ const side = n ? -1 : 1; activateCop(m, car.x + fz*2.3*side, car.z - fx*2.3*side); n++; }
+  }
+}
 function resetWanted(){
   wanted.heat = 0; wanted.stars = 0; wanted.unseen = 0; wanted.clearT = 0;
-  if (COPG) for (const m of COPG.members) parkCop(m);
+  wanted.hostileT = 0; wanted.grabT = 0; if (COPG) for (const m of COPG.members) parkCop(m);
+  for (const car of copCars.slice()) if (car.copActive && car.mode !== 'player') retireCopCar(car);
+  $('arrest').classList.remove('on');
 }
 function updateWanted(dt){
   if (!COPG) return;
@@ -1998,6 +2055,22 @@ function updateWanted(dt){
     if (d < nearest) nearest = d;
     if (d > farD && !m.los){ farD = d; far = m; }
   }
+  // police cars
+  let carsAct = 0;
+  for (const car of copCars){
+    if (!car.copActive) continue;
+    carsAct++;
+    const d = Math.hypot(car.x - player.x, car.z - player.z);
+    if (d < nearest) nearest = d;
+    if (d < 60 && losClear(car.x, 1.5, car.z, player.x, 1.5, player.z)) seen = true;
+    const ph = (performance.now()/170 | 0) & 1;
+    car.lbL.material.color.setHex(ph ? 0x4d7bff : 0x0a1030); car.lbR.material.color.setHex(ph ? 0x300808 : 0xff3b3b);
+    if (car.mode === 'ai'){
+      car.cruise = clamp(12 + d/5, 14, 30);
+      if (!car.deployed && d < 26 && (!player.car || Math.abs(player.car.v) < 4)) deployCops(car);
+    } else if (car.deployed && (car.retireT -= dt) <= 0 && d > 90 && wanted.stars === 0) retireCopCar(car);
+  }
+  wanted.hostileT = Math.max(0, wanted.hostileT - dt);
   wanted.seen = seen;
   if (seen) wanted.unseen = 0; else wanted.unseen += dt;
   if (wanted.unseen > 6) wanted.heat = Math.max(0, wanted.heat - (stars > 0 ? 7 : 3)*dt);   // out of sight: the heat dies down
@@ -2007,11 +2080,22 @@ function updateWanted(dt){
     else if (st === 0 && wanted.stars > 0) toast('Wanted level lost', '#8be26b');
     wanted.stars = st;
   }
-  const want = COPS_AT[st];
+  const want = COPS_AT[st], wantFoot = FOOT_AT[st];
+  wanted.carT -= dt;
+  if (st >= 2 && carsAct < CARS_AT[st] && wanted.carT <= 0 && !player.shop && !player.dead){ wanted.carT = 7; spawnCopCar(); }
+  if (st === 0 && carsAct > 0 && wanted.clearT > 5) for (const car of copCars) if (car.copActive && car.mode !== 'player' && Math.hypot(car.x - player.x, car.z - player.z) > 35) retireCopCar(car);
+  // arrest: a cop right next to you holds you for a moment
+  let grab = false;
+  if (st > 0 && !player.dead && (!player.car || Math.abs(player.car.v) < 3)){
+    for (const m of COPG.members) if (m.alive && Math.hypot(m.x - player.x, m.z - player.z) < (player.car ? 3.4 : 1.9)){ grab = true; break; }
+  }
+  wanted.grabT = grab ? wanted.grabT + dt : Math.max(0, wanted.grabT - dt*2);
+  $('arrestFill').style.width = Math.min(100, wanted.grabT/1.2*100) + '%'; $('arrest').classList.toggle('on', wanted.grabT > 0.05);
+  if (wanted.grabT > 1.2) busted();
   if (st > 0){
     wanted.clearT = 0;
     wanted.spawnT -= dt;
-    if (wanted.spawnT <= 0 && active < want && !player.shop && !player.dead){
+    if (wanted.spawnT <= 0 && active < wantFoot && !player.shop && !player.dead){
       wanted.spawnT = 1.1;
       const m = COPG.members.find(q => !q.alive && (q.parked || q.dead > 8));
       if (m){
@@ -2068,17 +2152,28 @@ function die(){
   player.dead = true; player.deadT = 0; player.hp = 0; keys.Fire = false; touchAim = false; $('btnAim').classList.remove('on'); document.body.classList.remove('scoped');
   if (player.car) exitCar();
   resetWanted();
+  player.busted = false; $('wasted').textContent = 'WASTED'; $('wasted').style.color = '';
   $('wasted').classList.add('show');
+}
+// arrested: pay a fine, lose the wanted level, and get taken back to the start
+function busted(){
+  if (player.dead) return;
+  const fine = Math.min(Math.floor(cash), 100 + 100*wanted.stars); cash -= fine; player.fine = fine;
+  player.dead = true; player.busted = true; player.deadT = 0; keys.Fire = false; touchAim = false; $('btnAim').classList.remove('on'); document.body.classList.remove('scoped');
+  if (player.car) exitCar();
+  resetWanted();
+  $('wasted').textContent = 'BUSTED'; $('wasted').style.color = '#6b9bff'; $('wasted').classList.add('show');
 }
 function updateDead(dt){
   player.deadT += dt;
-  hero.rotation.x = lerp(hero.rotation.x, -PI/2 * 0.98, Math.min(1, dt*6)); hero.position.y = lerp(hero.position.y, 0.12, Math.min(1, dt*6));
+  if (!player.busted){ hero.rotation.x = lerp(hero.rotation.x, -PI/2 * 0.98, Math.min(1, dt*6)); hero.position.y = lerp(hero.position.y, 0.12, Math.min(1, dt*6)); }
   if (player.deadT > 3.8) respawn();
 }
 function respawn(){
   player.dead = false; player.hp = 100; player.x = 11; player.z = -8; player.y = CURB; player.h = PI; player.v = 0; player.aimT = -1; player.regenT = 0;
   hero.rotation.x = 0; hero.position.y = 0; player.root.visible = true; hurtFx = 0;
-  $('wasted').classList.remove('show');
+  $('wasted').classList.remove('show'); $('wasted').textContent = 'WASTED'; $('wasted').style.color = '';
+  if (player.busted){ player.busted = false; toast('Busted: fined $' + (player.fine || 0), '#8fb0ff'); }
   for (const g of GANGS){ g.alerted = false; for (const m of g.members) if (m.alive){ m.state = 'idle'; m.burst = 0; } }
 }
 function toast(text, color){
@@ -2099,7 +2194,7 @@ function killMember(m, head){
 function damageMember(m, dealt, head){
   if (!m.alive) return;
   m.hp -= dealt; m.flash = 0.15; m.stun = Math.max(m.stun, 0.12);
-  if (m.g.cop) addCrime(25);
+  if (m.g.cop){ addCrime(25); wanted.hostileT = 25; }
   if (m.state === 'idle'){ m.state = 'combat'; m.react = 0.25; }
   m.g.alerted = true; m.g.alertT = 25;
   popText(m.x, CURB + 2.1, m.z, head ? 'HEAD ' + dealt : String(dealt), head ? '#ffd166' : '#ffffff');
@@ -2165,9 +2260,9 @@ function updateMember(m, g, dt){
     if (m.react > 0) m.react -= dt;
     else if (m.stun <= 0){
       const ew = m.ew, tx = dx/dist, tz = dz/dist;
-      if (m.kind === 'bat'){
-        if (dist > 1.5){ speed = 5; ux = tx; uz = tz; }
-        else if (!m.rig.swing && m.fireCd <= 0){ m.rig.swing = true; m.rig.act.Swing.reset().play(); m.rig.act.Swing.timeScale = 1.3; m.swingT = 0.34; m.fireCd = ew.rate; }
+      if (m.kind === 'bat' || (g.cop && !copShoots())){
+        if (dist > 1.5){ speed = g.cop ? 5.4 : 5; ux = tx; uz = tz; }
+        else if (m.kind === 'bat' && !m.rig.swing && m.fireCd <= 0){ m.rig.swing = true; m.rig.act.Swing.reset().play(); m.rig.act.Swing.timeScale = 1.3; m.swingT = 0.34; m.fireCd = ew.rate; }
       } else {
         if (!sees || dist > ew.pref + 4){ speed = sees ? 2.6 : 4.5; ux = tx; uz = tz; }
         else if (dist < ew.pref - 4){ speed = 2.0; ux = -tx; uz = -tz; }
@@ -2196,7 +2291,7 @@ function updateMember(m, g, dt){
   m.speed = speed;
   m.h += angDiff(m.h, face !== null ? face : (speed > 0 ? Math.atan2(ux, uz) : m.h)) * Math.min(1, dt*8);
   m.y = lerp(m.y, groundH(m.x, m.z), Math.min(1, dt*14));
-  m.aimK = lerp(m.aimK, (m.state === 'combat' && sees && m.react <= 0) ? 1 : 0, Math.min(1, dt*8));
+  m.aimK = lerp(m.aimK, (m.state === 'combat' && sees && m.react <= 0 && !(g.cop && !copShoots())) ? 1 : 0, Math.min(1, dt*8));
   // animation
   const T = {}, A = m.rig.act;
   T[speed > 3.6 ? 'Run_L' : speed > 0.4 ? 'Walk_L' : 'Idle_L'] = 1;
@@ -2585,7 +2680,7 @@ function drawMap(){
   for (const car of cars){
     const dx = (car.x-px)*SCALE, dz = (car.z-pz)*SCALE;
     if (Math.abs(dx) > 260 || Math.abs(dz) > 260) continue;
-    mctx.fillStyle = car === startCar ? '#ffc400' : (car.mode==='ai' ? '#e45' : '#aaa');
+    mctx.fillStyle = car.cop && car.copActive ? ((frameN & 8) ? '#3c6bff' : '#ff3b30') : car === startCar ? '#ffc400' : (car.mode==='ai' ? '#e45' : '#aaa');
     mctx.fillRect(dx-5, dz-5, 10, 10);
   }
   if (range.built){   // orange marker for the test range, pinned to the edge when it is out of view
@@ -2688,7 +2783,8 @@ function hijackDriver(car){
   witnessCrime(30);
 }
 function enterCar(car){
-  if (car.mode === 'ai') hijackDriver(car);
+  if (car.cop && car.copActive){ addCrime(40); dropCopCar(car); car.bar.visible = false; toast('Police car stolen', '#ff6a5a'); }
+  else if (car.mode === 'ai') hijackDriver(car);
   showCarName(car.type.name);
   player.car = car; car.mode = 'player'; car.ai = null; car.ignore = 0; car.st = car.thr = car.brk = car.yr = car.wz = 0;
   player.root.visible = false; player.oneShot = null; player.swing = false; player.hitT = -1; keys.Fire = false;
