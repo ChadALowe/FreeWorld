@@ -996,7 +996,7 @@ function solveArms(dt){
   // magazine change: left hand goes down to the mag well in the middle of the reload
   player.magK = ph > 0 ? Math.sin(Math.PI * clamp((ph - 0.3) / 0.4, 0, 1)) : 0;
   if (gun && rl > 0.001){
-    const s = STANCE[wp.id];
+    const s = gun;                                                           // base stance (fallback for weapons without their own entry)
     gun = {aim: s.aim,
            carry: s.carry.map((v, i) => lerp(v, RELOAD_POSE.carry[i], rl)),
            carryPitch: lerp(s.carryPitch, RELOAD_POSE.carryPitch, rl)};
