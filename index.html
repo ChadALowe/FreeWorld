@@ -952,13 +952,30 @@ function holdWeapon(ent, B, w, stance, aimK, aimDir, dt){
   }
   if (ent.ik >= 0.01 && w.grip){
     w.grip.getWorldPosition(_T);
+    if (ent.magK > 0.01){                                                      // left hand drops to the mag well, then back
+      _T.y -= 0.3*ent.magK; _T.x += fx*0.12*ent.magK + rx*0.08*ent.magK; _T.z += fz*0.12*ent.magK + rz*0.08*ent.magK;
+    }
     _pole.set(-rx*0.7, -1, -rz*0.7).normalize();                               // left elbow points down and out to the left
     solveArm(B.SL, B.EL, B.WL, _T, _pole, ent.ik);
   }
 }
+// reload pose: gun drops and tips toward the chest, rising back up over the reload time
+const RELOAD_POSE = {carry:[0.42, 0.92, 0.14], carryPitch:-1.2};   // out to the right side so the third-person camera can see it
 function solveArms(dt){
-  const wp = WEAPONS[player.weapon], gun = (wp.kind === 'gun' && STANCE[wp.id]) || null;
-  player.aimK = lerp(player.aimK || 0, (gun && player.aimT > 0) ? 1 : 0, Math.min(1, dt*9));
+  const wp = WEAPONS[player.weapon];
+  let gun = (wp.kind === 'gun' && STANCE[wp.id]) || null;
+  const spec = AMMO[wp.id];
+  const ph = (gun && player.reloadT > 0 && spec) ? clamp(1 - player.reloadT / spec.time, 0, 1) : 0;
+  const rl = ph > 0 ? Math.sin(Math.PI * ph) : 0;                            // gun drops and comes back up
+  // magazine change: left hand goes down to the mag well in the middle of the reload
+  player.magK = ph > 0 ? Math.sin(Math.PI * clamp((ph - 0.3) / 0.4, 0, 1)) : 0;
+  if (gun && rl > 0.001){
+    const s = STANCE[wp.id];
+    gun = {aim: s.aim,
+           carry: s.carry.map((v, i) => lerp(v, RELOAD_POSE.carry[i], rl)),
+           carryPitch: lerp(s.carryPitch, RELOAD_POSE.carryPitch, rl)};
+  }
+  player.aimK = lerp(player.aimK || 0, (gun && player.aimT > 0 && rl < 0.01) ? 1 : 0, Math.min(1, dt*9));
   player.recoil = recoil;
   const cp = Math.cos(pitch);
   _Dp.set(-Math.sin(yaw)*cp, -Math.sin(pitch) + recoil*0.12, -Math.cos(yaw)*cp);
@@ -1027,6 +1044,7 @@ function sfx(kind, V){
   else if (kind === 'hit'){ thump(140, 45, 0.16, 0.7); noise('lowpass', 700, 0.1, 0.4); }
   else if (kind === 'reload'){ noise('bandpass', 2400, 0.06, 0.45, 4); }
   else if (kind === 'click'){ noise('highpass', 5000, 0.025, 0.6); }
+  else if (kind === 'boom'){ noise('lowpass', 900, 0.7, 0.9); thump(90, 30, 0.5, 0.9); }
 }
 
 // ---- effects: tracers, sparks, smoke
@@ -1061,7 +1079,53 @@ function spark(x, y, z, n){
     s.life = 0.28; s.o.visible = true; s.o.scale.setScalar(1);
   }
 }
+// car explosion: three fireball lumps, a handful of bouncing debris boxes, one boom. Pools are fixed-size (phone friendly).
+const booms = [], debris = [];
+{
+  const fg = new THREE.IcosahedronGeometry(1, 0), fcol = [0xffb030, 0xff6a1a, 0xffe08a];
+  for (let i=0;i<3;i++){ const m = new THREE.Mesh(fg, new THREE.MeshBasicMaterial({color:fcol[i], transparent:true, opacity:0.95, depthWrite:false})); m.visible = false; scene.add(m); booms.push({o:m, life:0, max:1}); }
+  const dg = new THREE.BoxGeometry(1,1,1), dcol = [0x222226, 0x3a3a40, 0xc0392b, 0xdcdcdc];
+  for (let i=0;i<24;i++){ const m = new THREE.Mesh(dg, new THREE.MeshBasicMaterial({color:dcol[i%4]})); m.visible = false; scene.add(m); debris.push({o:m, life:0, vx:0, vy:0, vz:0, s:0.3}); }
+}
+function explodeCar(car){
+  const x = car.x, z = car.z, gy = groundH(x, z);
+  booms.forEach((b, i) => {
+    b.life = b.max = 0.45 + i*0.12;
+    b.o.position.set(x + (Math.random()-.5)*0.5, gy + 1.0 + i*0.3, z + (Math.random()-.5)*0.5);
+    b.o.scale.setScalar(0.4); b.o.visible = true;
+  });
+  let n = 0;
+  for (const d of debris){
+    if (n >= 8) break; if (d.life > 0) continue; n++;
+    d.life = 1.4 + Math.random()*0.9;
+    d.o.position.set(x, gy + 0.9, z);
+    d.vx = (Math.random()-.5)*6; d.vy = 3 + Math.random()*4; d.vz = (Math.random()-.5)*6;
+    d.s = 0.16 + Math.random()*0.2; d.o.scale.set(d.s, d.s*0.7, d.s*1.5); d.o.visible = true;
+  }
+  sfx('boom'); shake = Math.min(0.2, shake + 0.12);
+}
+function updateBooms(dt){
+  for (const b of booms){
+    if (b.life <= 0) continue;
+    b.life -= dt; const t = 1 - Math.max(0, b.life)/b.max;
+    b.o.scale.setScalar(0.4 + t*2.2);
+    b.o.material.opacity = Math.max(0, b.life/b.max) * 0.95;
+    if (b.life <= 0) b.o.visible = false;
+  }
+  for (const d of debris){
+    if (d.life <= 0) continue;
+    d.life -= dt;
+    d.vy -= 14*dt;
+    d.o.position.x += d.vx*dt; d.o.position.y += d.vy*dt; d.o.position.z += d.vz*dt;
+    const gy = groundH(d.o.position.x, d.o.position.z) + d.s*0.35;
+    if (d.o.position.y < gy){ d.o.position.y = gy; d.vy = -d.vy*0.35; d.vx *= 0.6; d.vz *= 0.6; }
+    d.o.rotation.x += dt*9; d.o.rotation.z += dt*7;
+    if (d.life < 0.4) d.o.scale.set(d.s, d.s*0.7, d.s*1.5).multiplyScalar(Math.max(0.05, d.life/0.4));   // shrink out at the end
+    if (d.life <= 0) d.o.visible = false;
+  }
+}
 function updateEffects(dt){
+  updateBooms(dt);
   for (const t of tracers){ if (t.life > 0){ t.life -= dt; t.o.material.opacity = Math.max(0, t.life/0.07); if (t.life <= 0) t.o.visible = false; } }
   for (const s of sparks){
     if (s.life <= 0) continue;
@@ -1141,6 +1205,7 @@ function panic(x, z, r){
 }
 function wreck(car){
   car.wrecked = true; car.mode = 'parked'; car.ai = null; car.smoke = true;
+  explodeCar(car);
   car.g.traverse(o => { if (o.isMesh && o.material.name === 'Body') o.material.color.setHex(0x1c1c1e); });
 }
 function hurtCar(car, dmg){
