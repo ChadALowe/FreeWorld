@@ -9,7 +9,7 @@ Open `index.html` in a browser. It is a single self-contained page; the characte
 - Space or left click: attack / shoot (hold for the SMG)
 - Right mouse or hold Z: aim (GTA IV style: tight over-the-shoulder camera, narrower field of view, steadier shots, slower look). Scroll while aiming to zoom further
 - 1-5 or R: weapons (fists, baseball bat, pistol, SMG, shotgun). H waves when unarmed
-- F get in/out of a car; W/S gas and brake, A/D steer, Space handbrake (hold it while steering to drift: skid marks, tyre smoke and screech)
+- F get in/out of a car; W/S gas and brake, A/D steer, Space handbrake (hold it while steering to drift: skid marks, tyre smoke and screech). Hold C to look back while driving
 
 ## Mobile
 Touch devices get an on-screen stick (left thumb), drag-to-look (right side) and Fire/Swing/Punch, Weapon, Wave and Drive buttons. In a car the stick steers (analog), you hold Gas to go, Brake to stop or reverse, and the red Hand brake button for handbrake turns and drifts. Hold Fire and slide the same thumb to keep aiming while shooting. The Aim button toggles the zoomed aim view, and the game asks for fullscreen when you tap to play (there is also a fullscreen button; iPhone Safari does not allow it). Append `?touch` to the URL to force touch controls on desktop.
@@ -23,6 +23,9 @@ You start with fists and $500, and the cash shows top-right in the GTA IV style 
 
 ## Vehicles
 There are 20 vehicles in traffic and parked on the kerb: the C1 and V60 plus 18 more in `assets/cars_roster.glb` (saloon, hatchback, coupe, muscle car, roadster, hot hatch, SUV, pickup, van, minibus, taxi, patrol car, ice cream van, kei truck, 4x4, limousine, classic saloon, GT coupe). Each is built from the same parametric body generator in the Blender file, around 500 triangles.
+
+## Driving
+Every vehicle has its own handling (power, top speed, brakes, steering lock, grip, mass, how easily the rear steps out, body roll), so the kei truck, minibus and GT coupe all feel different. Engine power tapers off towards top speed, brakes are about 1g, gas, brake and steering ramp in instead of snapping, and the front tyres understeer at speed. Rear grip is force-limited: power, braking and the handbrake lower it so the tail steps out, with skid marks and smoke. The body pitches under braking and acceleration and rolls in corners. Walls deflect or stop you, other cars are shoved by mass, crashes damage your car (it smokes when hurt and limps when wrecked) and shake the camera. The camera pulls back and widens with speed, follows part-way along a slide, and swings round when you reverse. Hold C to look back. Handling numbers live in the `HANDLING` table in `index.html`.
 
 ## Car park
 All 20 vehicles are parked in two rows in the car park far to the east of the city (teal marker on the minimap, named signs above each car). Walk or drive there to test them. Getting into any car briefly shows its name at the top of the screen.

@@ -129,7 +129,7 @@
   <div><b>G</b> reload</div>
   <div><b>H</b> wave (fists only)</div>
   <div><b>F</b> get in / out of a car</div>
-  <div><b>Car</b> W/S gas+brake · A/D steer · Space handbrake</div>
+  <div><b>Car</b> W/S gas+brake · A/D steer · Space handbrake · hold C look back</div>
 </div>
 <div id="mapwrap" class="hud"><canvas id="map" width="160" height="160"></canvas></div>
 <div id="clock" class="hud"></div>
@@ -2339,7 +2339,7 @@ function nearestCar(){
 }
 function enterCar(car){
   showCarName(car.type.name);
-  player.car = car; car.mode = 'player'; car.ai = null; car.ignore = 0;
+  player.car = car; car.mode = 'player'; car.ai = null; car.ignore = 0; car.st = car.thr = car.brk = car.yr = car.wz = 0;
   player.root.visible = false; player.oneShot = null; player.swing = false; player.hitT = -1; keys.Fire = false;
   $('xhair').style.display = 'none'; lastHud = '';
 }
@@ -2432,50 +2432,198 @@ function updateDriftFx(dt){
   if (!player.car) driftSlip = 0;
 }
 
-function updatePlayerCar(dt){
-  const car = player.car;
-  const gas = (keys.KeyW||keys.ArrowUp||touchGas ? 1 : 0), brake = (keys.KeyS||keys.ArrowDown||touchBrake ? 1 : 0);
-  const hb = !!(keys.Space || touchHB);
-  const steer = clamp((keys.KeyA||keys.ArrowLeft?1:0) - (keys.KeyD||keys.ArrowRight?1:0) - joy.x*1.2, -1, 1);
-  if (car.vx === undefined){ car.vx = Math.sin(car.h)*car.v; car.vz = Math.cos(car.h)*car.v; }
+// ---- per-vehicle handling. pw = peak engine accel (m/s^2), top = top speed (m/s), brk = brake decel (m/s^2),
+//      lock = steering lock (rad), grip = lateral grip limit (m/s^2), mass = relative mass (collisions),
+//      os = how easily throttle breaks the rear loose (power oversteer), roll = body roll
+const HANDLING_DEFAULT = {pw:8, top:36, brk:11, lock:0.52, grip:17, mass:1.2, os:0.3, roll:1};
+const HANDLING = {
+  c1:      {pw:5.5,   top:30, brk:10,   lock:0.58, grip:15,   mass:0.8, os:0.15, roll:1.2},
+  v60:     {pw:7.5,  top:42, brk:11.5, lock:0.5,  grip:17.5, mass:1.3, os:0.15, roll:1},
+  sedan:   {pw:7,  top:38, brk:11,   lock:0.52, grip:16.5, mass:1.2, os:0.2,  roll:1.1},
+  hatch:   {pw:6.5, top:35, brk:11,   lock:0.55, grip:16.5, mass:1.0, os:0.15, roll:1.1},
+  coupe:   {pw:9,  top:44, brk:12,   lock:0.5,  grip:19,   mass:1.2, os:0.45, roll:0.9},
+  muscle:  {pw:10.5,  top:46, brk:11,   lock:0.48, grip:15,   mass:1.6, os:0.75, roll:1.2},
+  roadster:{pw:9,top:43, brk:12.5, lock:0.52, grip:20,   mass:1.0, os:0.4,  roll:0.8},
+  hothatch:{pw:9,top:41, brk:12.5, lock:0.55, grip:20,   mass:1.0, os:0.2,  roll:0.9},
+  suv:     {pw:6.5, top:36, brk:10.5, lock:0.5,  grip:14.5, mass:1.9, os:0.2,  roll:1.5},
+  pickup:  {pw:6.5,   top:34, brk:10,   lock:0.5,  grip:14,   mass:1.9, os:0.4,  roll:1.4},
+  van:     {pw:5, top:31, brk:9.5,  lock:0.48, grip:13.5, mass:2.0, os:0.3,  roll:1.7},
+  minibus: {pw:4.5, top:29, brk:9,    lock:0.45, grip:12.5, mass:2.4, os:0.25, roll:1.8},
+  taxi:    {pw:7,  top:37, brk:11,   lock:0.52, grip:16.5, mass:1.2, os:0.2,  roll:1.1},
+  patrol:  {pw:9,top:44, brk:12,   lock:0.52, grip:18,   mass:1.3, os:0.35, roll:1},
+  icecream:{pw:4,   top:25, brk:9,    lock:0.5,  grip:12,   mass:2.0, os:0.25, roll:1.8},
+  kei:     {pw:5,   top:26, brk:9.5,  lock:0.6,  grip:13,   mass:0.7, os:0.1,  roll:1.2},
+  offroad: {pw:6.5, top:33, brk:10.5, lock:0.5,  grip:15,   mass:1.6, os:0.15, roll:1.6},
+  limo:    {pw:5.5,   top:35, brk:10,   lock:0.42, grip:13.5, mass:2.2, os:0.2,  roll:1.4},
+  classic: {pw:7,  top:38, brk:10,   lock:0.5,  grip:14,   mass:1.5, os:0.55, roll:1.3},
+  gt:      {pw:11,  top:52, brk:13.5, lock:0.48, grip:22,   mass:1.2, os:0.45, roll:0.8}
+};
+function handlingOf(type){ return type.hd || (type.hd = Object.assign({}, HANDLING_DEFAULT, HANDLING[type.key])); }
+let camBackHeld = false, camSpd = 0;
+
+// one physics step. The car keeps a world velocity; it is split into "along the nose" (vf) and "sideways" (vl).
+//  - engine: acceleration tapers off towards top speed, so launches are strong and the last bit of speed is slow
+//  - brakes: about 1g, scaled by the brake pedal; gas/brake pedals are ramped in updatePlayerCar
+//  - steering: the front wheels' angle (car.st, smoothed) gives a yaw rate from the wheelbase; the front tyres can only
+//    turn the car as hard as their grip allows, so at speed it understeers instead of snapping round
+//  - rear tyres: sideways grip is force-limited. Power through the rear, braking or the handbrake lower it, so the tail
+//    steps out and slides (and the sliding tyres drag the car down) instead of the grip being all-or-nothing
+function driveStep(car, hd, dt, gas, brake, hb){
   const fx = Math.sin(car.h), fz = Math.cos(car.h), rx = -fz, rz = fx;      // forward and right
-  let vf = car.vx*fx + car.vz*fz, vl = car.vx*rx + car.vz*rz;               // speed along the nose and sideways
-  if (gas) vf += (vf < 0 ? 40 : 15) * dt;
-  if (brake) vf -= (vf > 0 ? 34 : 9) * dt;
-  if (!gas && !brake) vf -= Math.sign(vf) * Math.min(Math.abs(vf), 5*dt);
-  vf = clamp(vf, -9, 34);
-  vl *= Math.exp(-(hb ? 0.9 : (Math.abs(vl) > 6 ? 5 : 9)) * dt);            // tyre grip: strong normally, almost gone on the handbrake
-  if (hb) vf -= Math.sign(vf) * Math.min(Math.abs(vf), 7*dt);                // locked rear wheels drag the car down
-  const sp = Math.hypot(vf, vl);
-  const yawF = hb ? Math.min(1, sp/4) * (vf >= -0.5 ? 1 : -1) : clamp(vf/4, -1, 1);
-  car.vx = fx*vf + rx*vl; car.vz = fz*vf + rz*vl;
-  car.h += steer * 1.9 * (1 - Math.min(sp/50, 0.45)) * (hb ? 1.6 : 1) * dt * yawF;   // the handbrake swings the tail round harder
-  car.x += car.vx*dt; car.z += car.vz*dt;
-  let hit = false;
-  for (const q of carPoints(car)){
-    const before = {x:q.x, z:q.z}, t = {x:q.x, z:q.z};
-    let h = pushOut(t, car.type.r);
-    for (const o of cars){ if (o !== car) h = pushFromPoints(t, 1.0, carPoints(o)) || h; }
-    if (h){ car.x += t.x - before.x; car.z += t.z - before.z; hit = true; }
+  let vf = car.vx*fx + car.vz*fz, vl = car.vx*rx + car.vz*rz;
+  const hurt = (car.hp !== undefined && car.hp <= 0) ? 0.45 : 1;            // a wrecked engine only limps
+  const top = hd.top*hurt;
+  if (gas){
+    if (vf < 0) vf += 40*dt;                                                // gas while rolling backwards brakes hard
+    else vf += hd.pw*hurt*car.thr*Math.max(0, 1 - Math.pow(vf/top, 2.2))*dt;
   }
-  if (hit){ const k = 1 - Math.min(1, dt*5); car.vx *= k; car.vz *= k; }
+  if (brake){
+    if (vf > 0) vf -= hd.brk*Math.max(car.brk, 0.35)*dt;
+    else vf -= 9*dt;
+  }
+  if (!gas && !brake) vf -= Math.sign(vf) * Math.min(Math.abs(vf), (3 + 0.0022*vf*vf)*dt);   // engine braking and drag
+  vf = clamp(vf, -9, top*1.02);
+  if (hb) vf -= Math.sign(vf) * Math.min(Math.abs(vf), 7*dt);               // locked rear wheels drag the car down
+  // rear tyres
+  const sp0 = Math.hypot(vf, vl);
+  const power = hd.os * car.thr * clamp(sp0/12, 0, 1) * (0.35 + 0.65*Math.abs(car.st));
+  let gripR = hd.grip * (hb ? 0.14 : 1) * (1 - Math.min(0.65, power*1.0)) * (1 - 0.12*car.brk*clamp(sp0/15, 0, 1));
+  const want = -vl*11, sat = Math.abs(want) > gripR;
+  let dvl = (sat ? Math.sign(want)*gripR*0.93 : want) * dt;                // sliding tyres give a bit less than gripping ones
+  if (Math.abs(dvl) > Math.abs(vl)) dvl = -vl;
+  const slideDrag = Math.abs(dvl) * Math.abs(vl) / Math.max(Math.abs(vf), 3) * 0.8;
+  vl += dvl;
+  vf -= Math.sign(vf) * Math.min(Math.abs(vf), slideDrag);
+  const sp = Math.hypot(vf, vl);
+  // steering
+  let yawT;
+  if (hb) yawT = car.st * 1.9 * (1 - Math.min(sp/50, 0.45)) * 1.6 * Math.min(1, sp/4) * (vf >= -0.5 ? 1 : -1);   // the tail swings round
+  else {
+    const lockEff = hd.lock * car.st / (1 + (sp/24)*(sp/24));
+    yawT = vf * Math.tan(lockEff) / (car.type.half*1.24);
+    const frontLim = hd.grip*1.05 / Math.max(Math.abs(vf), 4);
+    yawT = clamp(yawT, -frontLim, frontLim);
+    const out = Math.sign(yawT) * vl;                                      // sideways speed towards the way the tail is swinging = oversteer
+    if (out > 0) yawT /= 1 + (out/4.5)*(out/4.5);                          // the front tyres lose bite as the slide builds, so it settles instead of spinning
+    if (vf > 2) yawT -= clamp(vl, -8, 8) * 0.12;                           // and the tyres pull the nose back in line with where the car is going
+  }
+  car.yr += (yawT - car.yr) * Math.min(1, dt*10);                          // the car takes a moment to rotate
+  car.vx = fx*vf + rx*vl; car.vz = fz*vf + rz*vl;
+  car.h += (car.yr + car.wz) * dt;
+  car.wz *= Math.exp(-3*dt);
+  car.x += car.vx*dt; car.z += car.vz*dt;
+  return {vf, vl, sp};
+}
+
+// walls and other cars: push out, bounce and deflect (a glancing hit slides along, a head-on hit stops you), spin the car
+// when a corner clips something, and shove other cars by mass. Returns the hardest impact speed this step.
+function driveCollide(car, hd){
+  let impact = 0;
+  for (let k = 0; k < 2; k++){
+    let q = carPoints(car)[k];
+    const t = {x:q.x, z:q.z}, rx_ = q.x - car.x, rz_ = q.z - car.z;
+    if (pushOut(t, car.type.r)){
+      const dx = t.x - q.x, dz = t.z - q.z, d = Math.hypot(dx, dz);
+      if (d > 1e-5){
+        const nx = dx/d, nz = dz/d;
+        car.x += dx; car.z += dz;
+        const vn = car.vx*nx + car.vz*nz;
+        if (vn < 0){
+          const e = vn < -2 ? 0.22 : 0;
+          car.vx -= (1+e)*vn*nx; car.vz -= (1+e)*vn*nz;
+          const vn2 = car.vx*nx + car.vz*nz, tx = car.vx - vn2*nx, tz = car.vz - vn2*nz, tl = Math.hypot(tx, tz);
+          if (tl > 1e-4){ const f = Math.min(tl, 0.3*(1+e)*(-vn)) / tl; car.vx -= tx*f; car.vz -= tz*f; }   // scraping friction
+          car.wz = clamp(car.wz + (nx*rz_ - nz*rx_) * (-vn) * 0.06 / hd.mass, -2.5, 2.5);
+          impact = Math.max(impact, -vn);
+        }
+      }
+    }
+    for (const o of cars){
+      if (o === car) continue;
+      const ddx = o.x - car.x, ddz = o.z - car.z;
+      if (ddx*ddx + ddz*ddz > 36) continue;
+      const oh = handlingOf(o.type), ofx = Math.sin(o.h), ofz = Math.cos(o.h);
+      for (const oq of carPoints(o)){
+        q = carPoints(car)[k];
+        const dx = q.x - oq.x, dz = q.z - oq.z, rr = 2.0, d2 = dx*dx + dz*dz;
+        if (d2 >= rr*rr) continue;
+        const d = Math.sqrt(d2) || 0.001, nx = dx/d, nz = dz/d, pen = rr - d;
+        const share = oh.mass / (hd.mass + oh.mass);
+        car.x += nx*pen*share; car.z += nz*pen*share;
+        o.x -= nx*pen*(1-share); o.z -= nz*pen*(1-share);
+        const vrel = (car.vx - ofx*o.v)*nx + (car.vz - ofz*o.v)*nz;
+        if (vrel < 0){
+          const j = -1.15*vrel / (1/hd.mass + 1/oh.mass);
+          car.vx += j/hd.mass*nx; car.vz += j/hd.mass*nz;
+          o.v = clamp(o.v - j/oh.mass*(nx*ofx + nz*ofz), -12, 40);
+          car.wz = clamp(car.wz + (nx*(q.z-car.z) - nz*(q.x-car.x)) * (-vrel) * 0.04 / hd.mass, -2.5, 2.5);
+          impact = Math.max(impact, -vrel);
+          const now = performance.now();
+          if (-vrel > 6 && now > (o.hurtT || 0)){ o.hurtT = now + 400; hurtCar(o, (-vrel - 6)*2.5); }
+        }
+        const t2 = {x:o.x, z:o.z}; if (pushOut(t2, o.type.r)){ o.x = t2.x; o.z = t2.z; }
+      }
+    }
+  }
+  return impact;
+}
+
+function updatePlayerCar(dt){
+  const car = player.car, hd = handlingOf(car.type);
+  const gas = !!(keys.KeyW||keys.ArrowUp||touchGas), brake = !!(keys.KeyS||keys.ArrowDown||touchBrake);
+  const hb = !!(keys.Space || touchHB);
+  const kb = keys.KeyA||keys.ArrowLeft||keys.KeyD||keys.ArrowRight;
+  const steerIn = clamp((keys.KeyA||keys.ArrowLeft?1:0) - (keys.KeyD||keys.ArrowRight?1:0) - joy.x*1.2, -1, 1);
+  if (car.vx === undefined){ car.vx = Math.sin(car.h)*car.v; car.vz = Math.cos(car.h)*car.v; }
+  if (car.st === undefined){ car.st = 0; car.thr = 0; car.brk = 0; car.yr = 0; car.wz = 0; }
+  // pedals ramp up and the steering wheel turns and re-centres at a finite rate, instead of jumping
+  car.thr += clamp((gas ? 1 : 0) - car.thr, -10*dt, 6*dt);
+  car.brk += clamp((brake ? 1 : 0) - car.brk, -12*dt, 9*dt);
+  const growing = Math.abs(steerIn) > Math.abs(car.st) && steerIn*car.st >= 0;
+  const sr = (!kb && Math.abs(joy.x) > 0.05) ? 12 : (growing ? 4.5 : 7);
+  car.st += clamp(steerIn - car.st, -sr*dt, sr*dt);
+  // physics in small steps so a fast car cannot skip through a thin wall
+  const n = clamp(Math.ceil(dt/0.012), 1, 5), h = dt/n, v0 = car.v || 0;
+  let last = null, impact = 0;
+  for (let i = 0; i < n; i++){
+    last = driveStep(car, hd, h, gas, brake, hb);
+    impact = Math.max(impact, driveCollide(car, hd));
+  }
   car.x = clamp(car.x, -WORLD, WORLD); car.z = clamp(car.z, -WORLD, WORLD);
   const hx = Math.sin(car.h), hz = Math.cos(car.h);
   car.v = car.vx*hx + car.vz*hz;                                              // forward speed for the rest of the game
-  // skid marks, tyre smoke and screech while sliding
-  let slip = clamp((Math.abs(vl) - 1.8) / 5, 0, 1);
+  // crashes hurt the car, shake the camera and make a noise; a badly damaged car smokes
+  if (impact > 4.5 && performance.now() > (car.crashT || 0)){
+    car.crashT = performance.now() + 250;
+    hurtCar(car, (impact - 4.5)*2.2);
+    shake = Math.min(0.2, shake + impact*0.012);
+    sfx('hit');
+  }
+  if (car.hp !== undefined && car.hp < 30) car.smoke = true;
+  // body motion: nose dips under braking, squats under power, leans out of corners
+  const ax = clamp((car.v - v0)/dt, -14, 14), ay = clamp(car.yr*car.v, -22, 22);
+  car.pitch = (car.pitch||0) + (clamp(-ax*0.0042, -0.06, 0.07) - (car.pitch||0)) * Math.min(1, dt*7);
+  car.roll = (car.roll||0) + (clamp(ay*0.0045*hd.roll, -0.11, 0.11) - (car.roll||0)) * Math.min(1, dt*6);
+  // skid marks, tyre smoke and screech while sliding (or spinning the wheels off the line)
+  const sp = last.sp;
+  let slip = clamp((Math.abs(last.vl) - 1.8) / 5, 0, 1);
   if (hb && sp > 3) slip = Math.max(slip, 0.7);
-  driftSlip = sp > 2.5 ? slip : 0;
-  if (driftSlip > 0.12) emitDrift(car, car.vx, car.vz, driftSlip, dt, sp);
+  if (car.thr > 0.9 && last.vf > 0 && last.vf < 6 && hd.pw > 12) slip = Math.max(slip, 0.4);
+  driftSlip = sp > 2.5 || slip > 0.35 ? slip : 0;
+  if (driftSlip > 0.12) emitDrift(car, car.vx, car.vz, driftSlip, dt, Math.max(sp, 3));
   $('hb').style.opacity = hb ? 1 : 0.25;
-  // run people over
+  // run people over: anything the car body (not just the nose) sweeps into
+  const bodyHit = (px, pz, extra) => {
+    const dx = px - car.x, dz = pz - car.z, lf = dx*hx + dz*hz, ls = -dx*hz + dz*hx;
+    return lf > -car.type.half + 0.2 && lf < car.type.front + 0.5 && Math.abs(ls) < car.type.track + 0.7 + extra;
+  };
   if (Math.abs(car.v) > 4) for (const p of peds){
     if (p.state === 'down') continue;
-    if (Math.hypot(p.x - (car.x + hx*car.type.front*Math.sign(car.v)), p.z - (car.z + hz*car.type.front*Math.sign(car.v))) < 1.7) knock(p);
+    if (bodyHit(p.x, p.z, 0)) knock(p);
   }
   if (Math.abs(car.v) > 5) for (const g of GANGS) if (g.members) for (const m of g.members){     // run gang members over
     if (!m.alive || performance.now() < (m.carCd || 0)) continue;
-    if (Math.hypot(m.x - (car.x + hx*car.type.front*Math.sign(car.v)), m.z - (car.z + hz*car.type.front*Math.sign(car.v))) < 1.8){ m.carCd = performance.now() + 600; damageMember(m, Math.round(Math.abs(car.v)*7), false); }
+    if (bodyHit(m.x, m.z, 0.1)){ m.carCd = performance.now() + 600; damageMember(m, Math.round(Math.abs(car.v)*7), false); }
   }
   if (Math.abs(car.v) > 3) rangeCar(car, hx, hz);
   player.x = car.x; player.z = car.z;
@@ -2489,7 +2637,9 @@ function updateCars(dt){
       car.x += Math.sin(car.h)*car.v*dt; car.z += Math.cos(car.h)*car.v*dt;
       const t = {x:car.x, z:car.z}; if (pushOut(t, car.type.r)){ car.x = t.x; car.z = t.z; car.v = 0; }
     }
-    car.g.position.set(car.x, 0, car.z); car.g.rotation.y = car.h;
+    if (car.mode !== 'player' && (car.pitch || car.roll)){ const k = Math.min(1, dt*5); car.pitch -= car.pitch*k; car.roll -= car.roll*k; }
+    car.y = (car.y || 0) + (groundH(car.x, car.z) - (car.y || 0)) * Math.min(1, dt*14);        // ride up kerbs smoothly
+    car.g.position.set(car.x, car.y, car.z); car.g.rotation.set(car.pitch || 0, car.h, car.roll || 0, 'YXZ');
     car.spin += car.v*dt/car.type.wr;
     for (const w of car.wheels) w.rotation.x = car.spin;
   }
@@ -2505,15 +2655,23 @@ function updateCamera(dt){
   const gunOut = !inCar && WEAPONS[player.weapon].kind === 'gun';
   camAim = lerp(camAim, (gunOut && (aimHeld || keys.KeyZ || touchAim)) ? 1 : 0, Math.min(1, dt*9));
   shoulder = lerp(shoulder, gunOut ? lerp(0.6, 0.85, camAim) : 0, Math.min(1, dt*6));
-  const fovT = lerp(60, aimFov, camAim);
+  camSpd = lerp(camSpd, inCar ? clamp(Math.abs(player.car.v)/40, 0, 1) : 0, Math.min(1, dt*2));
+  const fovT = lerp(60, aimFov, camAim) + camSpd*12;      // widen the view with speed
   if (Math.abs(camera.fov - fovT) > 0.05){ camera.fov = fovT; camera.updateProjectionMatrix(); }
   fx += Math.cos(yaw) * shoulder; fz -= Math.sin(yaw) * shoulder;
   if (inCar){
     const car = player.car;
-    if (performance.now() - lastLook > 1500 && Math.abs(car.v) > 2)
-      yaw += angDiff(yaw, car.h + PI + (car.v < 0 ? PI : 0)) * Math.min(1, dt*2.2);
+    if (keys.KeyC){ yaw += angDiff(yaw, car.h) * Math.min(1, dt*9); camBackHeld = true; lastLook = performance.now(); }   // hold C to look back
+    else {
+      if (camBackHeld){ camBackHeld = false; lastLook = 0; }
+      if (performance.now() - lastLook > 1500 && Math.abs(car.v) > 2){
+        let tgt = car.h + PI + (car.v < 0 ? PI : 0);                       // (swings round when you reverse, as before)
+        if (car.v > 0 && Math.hypot(car.vx || 0, car.vz || 0) > 6) tgt = car.h + angDiff(car.h, Math.atan2(car.vx, car.vz))*0.5 + PI;   // in a drift, look part-way along the slide
+        yaw += angDiff(yaw, tgt) * Math.min(1, dt*2.2);
+      }
+    }
   }
-  const want = inCar ? 9.5 * zoom : lerp(4.6 * zoom, 2.0, camAim);
+  const want = inCar ? (9.5 + camSpd*2.4) * zoom : lerp(4.6 * zoom, 2.0, camAim);
   camTarget.set(fx, fy, fz);
   const dir = new THREE.Vector3(Math.sin(yaw)*Math.cos(pitch), Math.sin(pitch), Math.cos(yaw)*Math.cos(pitch));
   // pull the camera in when buildings are in the way
