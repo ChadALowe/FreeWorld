@@ -102,6 +102,7 @@
   .tbtn.on{background:rgba(255,209,102,.75);color:#15181d}
   #btnHand{width:66px;height:66px;font-size:11px;right:calc(max(22px,env(safe-area-inset-right,0px)) + 12px);bottom:calc(max(26px,calc(env(safe-area-inset-bottom,0px) + 14px)) + 100px);background:rgba(150,40,40,.6)}
   #btnHand.down{background:rgba(255,90,74,.85);color:#fff}
+  #btnReload{width:62px;height:62px;font-size:12px;right:calc(max(22px,env(safe-area-inset-right,0px)) + 14px);bottom:calc(max(26px,calc(env(safe-area-inset-bottom,0px) + 14px)) + 172px)}
   #hb{margin-left:12px;font-size:12px;font-weight:700;letter-spacing:.1em;color:#ff5a4a;opacity:.25}
   #fsBtn{position:fixed;z-index:6;left:max(12px,env(safe-area-inset-left,0px));top:max(12px,env(safe-area-inset-top,0px));width:42px;height:42px;border-radius:10px;border:1px solid rgba(255,255,255,.35);background:rgba(20,24,32,.55);color:#fff;font-size:20px;line-height:1;display:none;align-items:center;justify-content:center;padding:0;touch-action:none}
   body.touch.started #fsBtn.can{display:flex}
@@ -123,6 +124,7 @@
   <div><b>Q / E</b> turn camera</div>
   <div><b>Space</b> / click: attack, shoot</div>
   <div><b>1-5</b> / <b>R</b> weapons</div>
+  <div><b>G</b> reload</div>
   <div><b>H</b> wave (fists only)</div>
   <div><b>F</b> get in / out of a car</div>
   <div><b>Car</b> W/S gas+brake · A/D steer · Space handbrake</div>
@@ -135,8 +137,8 @@
   <div class="shopHead"><b>CHEAP PETE'S GUNS</b><span id="shopMoney"></span></div>
   <div id="shopLine"></div>
   <div class="shopItem"><div class="siRow"><span id="siName"></span><span id="siPrice"></span></div><div id="siStats"></div><div id="siBlurb"></div></div>
-  <div class="shopBtns"><button id="shopPrev" aria-label="Previous weapon">&#9664;</button><button id="shopBuy">Buy</button><button id="shopNext" aria-label="Next weapon">&#9654;</button><button id="shopLeave">Leave</button></div>
-  <div class="shopKeys">&#8592; &#8594; browse &middot; Enter buy &middot; Esc leave</div>
+  <div class="shopBtns"><button id="shopPrev" aria-label="Previous weapon">&#9664;</button><button id="shopBuy">Buy</button><button id="shopAmmo">Ammo</button><button id="shopNext" aria-label="Next weapon">&#9654;</button><button id="shopLeave">Leave</button></div>
+  <div class="shopKeys">&#8592; &#8594; browse &middot; Enter buy &middot; B ammo &middot; Esc leave</div>
 </div>
 <div id="hurt" class="hud"></div>
 <div id="vitals" class="hud"><div id="hpbar"><div id="hpfill"></div></div><div id="cashline">$0  ·  Kills 0</div><div id="turf"></div></div>
@@ -153,6 +155,7 @@
 <div id="btnWeapon" class="tbtn tc">Fists</div>
 <div id="btnAim" class="tbtn tc" style="display:none">Aim</div>
 <div id="btnHand" class="tbtn tc" style="display:none">Hand<br>brake</div>
+<div id="btnReload" class="tbtn tc" style="display:none">Reload</div>
 <button id="fsBtn" aria-label="Toggle fullscreen">&#x26F6;</button>
 <div id="xhair" class="hud"></div>
 <div id="weapon" class="hud">Fists</div>
@@ -669,6 +672,7 @@ let touchGas = false, touchBrake = false;
   press($('btnWeapon'), () => { once.KeyR = true; });
   press($('btnAim'), () => { touchAim = !touchAim; $('btnAim').classList.toggle('on', touchAim); });
   press($('btnHand'), () => { touchHB = true; }, () => { touchHB = false; });
+  press($('btnReload'), () => { once.KeyG = true; });
   {  // slide the thumb while holding Fire to keep aiming (same sensitivity as the look zone)
     const fb = $('btnAct'); let pid = null, px = 0, py = 0;
     fb.addEventListener('pointerdown', e => { pid = e.pointerId; px = e.clientX; py = e.clientY; });
@@ -687,7 +691,7 @@ let touchGas = false, touchBrake = false;
 }
 
 // ---------------------------------------------------------------- player & peds
-const player = {x:11, z:-8, y:CURB, v:0, h:PI, car:null, hp:100, dead:false, deadT:0, regenT:0, weapon:0, cool:0, aimT:0, hitT:-1, flashT:0, oneShot:null, swing:false, root:null, mixer:null, act:{}, wt:{}};
+const player = {x:11, z:-8, y:CURB, v:0, h:PI, car:null, hp:100, dead:false, deadT:0, regenT:0, reloadT:0, weapon:0, cool:0, aimT:0, hitT:-1, flashT:0, oneShot:null, swing:false, root:null, mixer:null, act:{}, wt:{}};
 const peds = [];
 let clips = null, hero = null;
 
@@ -939,7 +943,7 @@ function attachWeapons(){
 function setWeapon(i){
   const n = WEAPONS.length; i = ((i % n) + n) % n;
   if (!owned[WEAPONS[i].id]){ if (started) toast('You do not own that. Buy it at the gun shop.', '#ffd23a'); return; }
-  player.weapon = i; player.cool = 0.25; player.aimT = 0; player.swing = false; player.hitT = -1;
+  player.weapon = i; player.reloadT = 0; player.cool = 0.25; player.aimT = 0; player.swing = false; player.hitT = -1;
   WEAPONS.forEach((w,k) => { if (w.obj) w.obj.visible = (k === i); });
 }
 
@@ -975,6 +979,8 @@ function sfx(kind, V){
   else if (kind === 'shotgun'){ noise('lowpass', 1500, 0.38, 0.9); thump(120, 35, 0.3, 0.8); }
   else if (kind === 'swing'){ noise('bandpass', 900, 0.14, 0.25, 1.2); }
   else if (kind === 'hit'){ thump(140, 45, 0.16, 0.7); noise('lowpass', 700, 0.1, 0.4); }
+  else if (kind === 'reload'){ noise('bandpass', 2400, 0.06, 0.45, 4); }
+  else if (kind === 'click'){ noise('highpass', 5000, 0.025, 0.6); }
 }
 
 // ---- effects: tracers, sparks, smoke
@@ -1108,6 +1114,7 @@ function applyHit(hit, p, dmg, d){
 }
 const _m = new THREE.Vector3();
 function fireGun(w){
+  const AA = ammoOf(w); if (AA) AA.mag = Math.max(0, AA.mag - 1);     // one round per shot (a shotgun blast is one round)
   const base = camera.getWorldDirection(new THREE.Vector3());
   const origin = camera.position.clone().addScaledVector(base, camDist * 0.9 + 0.3);
   w.muzzle.getWorldPosition(_m);
@@ -1155,17 +1162,27 @@ function updateActions(dt){
   if (once.KeyR) cycleWeapon(1);
   if (once.KeyH && w.id === 'fists' && !player.oneShot && !player.swing){ player.oneShot = 'Wave'; player.act.Wave.reset().play(); }
   const pressed = once.Space || once.Fire, held = keys.Space || keys.Fire;
-  if ((w.auto ? held : pressed) && player.cool <= 0 && !player.oneShot && !player.swing && !player.shop){
+  const A = ammoOf(w), trig = w.auto ? held : pressed;
+  if (A){
+    if (once.KeyG) startReload(w);
+    if (trig && player.cool <= 0 && A.mag <= 0 && player.reloadT <= 0){
+      if (A.res > 0) startReload(w);
+      else { player.cool = 0.35; sfx('click'); toast('Out of ammo: buy more at the gun shop', '#ff6a5a'); }
+    }
+    if (player.reloadT > 0){ player.reloadT -= dt; if (player.reloadT <= 0) finishReload(w); }
+  }
+  if (trig && (!A || (A.mag > 0 && player.reloadT <= 0)) && player.cool <= 0 && !player.oneShot && !player.swing && !player.shop){
     player.cool = w.rate;
     if (w.kind === 'gun') fireGun(w);
     else if (w.id === 'bat'){ player.swing = true; player.act.Swing.reset().play(); player.act.Swing.timeScale = 1.45; player.hitT = 0.3; sfx('swing'); }
     else { player.oneShot = 'Punch'; player.act.Punch.reset().play(); player.act.Punch.timeScale = 1.7; player.hitT = 0.34; sfx('swing'); }
   }
   if (player.hitT >= 0){ player.hitT -= dt; if (player.hitT < 0) meleeHit(w); }
-  const hud = w.name + '|' + (w.kind === 'gun' && !player.car);
+  const ammoTxt = A ? (player.reloadT > 0 ? 'RELOADING' : A.mag + ' / ' + A.res) : '';
+  const hud = w.name + '|' + ammoTxt + '|' + (w.kind === 'gun' && !player.car);
   if (hud !== lastHud){
     lastHud = hud;
-    $('weapon').textContent = w.name;
+    $('weapon').textContent = A ? w.name + '   ' + ammoTxt : w.name;
     $('xhair').style.display = (w.kind === 'gun' && !player.car) ? 'block' : 'none';
   }
 }
@@ -1723,6 +1740,21 @@ function updateVitals(dt){
 // talk to the shopkeeper and browse the board at the back to buy weapons. The interior is a small room built far
 // away from the city; going in and out is a fade to black and a teleport.
 const owned = {fists:true};
+// ammo: a magazine plus a reserve for each gun. Buying a gun gives one full magazine and one box in reserve.
+const AMMO = {pistol:{mag:12, box:24, price:40, time:1.1}, smg:{mag:30, box:60, price:70, time:1.7}, shotgun:{mag:6, box:12, price:90, time:2.2}};
+const ammo = {};
+function ammoOf(w){ return (w && AMMO[w.id] && ammo[w.id]) || null; }
+function initAmmo(id){ if (AMMO[id]) ammo[id] = {mag: AMMO[id].mag, res: AMMO[id].box}; }
+function startReload(w){
+  const A = ammoOf(w), spec = w && AMMO[w.id];
+  if (!A || player.reloadT > 0 || A.mag >= spec.mag || A.res <= 0) return;
+  player.reloadT = spec.time; sfx('reload');
+}
+function finishReload(w){
+  const A = ammoOf(w), spec = AMMO[w.id];
+  const take = Math.min(spec.mag - A.mag, A.res);
+  A.mag += take; A.res -= take; player.reloadT = 0; saveGame();
+}
 const SHOP_ITEMS = [
   {id:'bat',     name:'Baseball Bat', price:60,  dmg:4, rate:3, range:1, blurb:'Old school. Swing it at anything that moves.'},
   {id:'pistol',  name:'Pistol',       price:250, dmg:2, rate:3, range:3, blurb:'Reliable sidearm. Accurate and easy to carry.'},
@@ -1739,9 +1771,9 @@ function cycleWeapon(dir){
 // progress is kept in the browser, so purchases and cash survive a reload
 let lastSave = '';
 function saveGame(){
-  const s = cash + '|' + kills + '|' + Object.keys(owned).join(',');
+  const s = cash + '|' + kills + '|' + Object.keys(owned).join(',') + '|' + JSON.stringify(ammo);
   if (s === lastSave) return; lastSave = s;
-  try { localStorage.setItem('freeworld_save', JSON.stringify({cash, kills, owned})); } catch(e){}
+  try { localStorage.setItem('freeworld_save', JSON.stringify({cash, kills, owned, ammo})); } catch(e){}
 }
 function loadGame(){
   try {
@@ -1750,6 +1782,8 @@ function loadGame(){
     if (typeof s.cash === 'number') cash = s.cash;
     if (typeof s.kills === 'number') kills = s.kills;
     if (s.owned) for (const k in s.owned) if (s.owned[k] && WEAPONS.some(w => w.id === k)) owned[k] = true;
+    if (s.ammo) for (const k in s.ammo) if (AMMO[k] && owned[k] && s.ammo[k]) ammo[k] = {mag: Math.min(AMMO[k].mag, s.ammo[k].mag|0), res: Math.max(0, s.ammo[k].res|0)};
+    for (const k in AMMO) if (owned[k] && !ammo[k]) initAmmo(k);
   } catch(e){}
 }
 function tagTex(it){
@@ -1864,9 +1898,10 @@ function refreshShopUI(){
   $('siName').textContent = it.name;
   const pr = $('siPrice'); pr.textContent = got ? 'OWNED' : '$' + it.price; pr.style.color = got ? '#6be36b' : (cash >= it.price ? '#ffd23a' : '#ff6a5a');
   $('siStats').innerHTML = 'Damage <b>' + bars(it.dmg) + '</b> &nbsp; Rate <b>' + bars(it.rate) + '</b> &nbsp; Range <b>' + bars(it.range) + '</b>';
-  $('siBlurb').textContent = it.blurb;
+  $('siBlurb').textContent = it.blurb + (AMMO[it.id] ? '  Ammo: $' + AMMO[it.id].price + ' for ' + AMMO[it.id].box + ' rounds.' : '');
   $('shopMoney').textContent = '$' + cash;
   const b = $('shopBuy'); b.textContent = got ? 'Owned' : 'Buy  $' + it.price; b.classList.toggle('dim', got || cash < it.price);
+  const ab = $('shopAmmo'); ab.textContent = AMMO[it.id] && got ? 'Ammo $' + AMMO[it.id].price : 'Ammo'; ab.classList.toggle('dim', !(AMMO[it.id] && got) || cash < (AMMO[it.id] ? AMMO[it.id].price : 0));
   const x = shop.items[shop.sel].x; shop.plate.position.x = shop.ix + x;
 }
 function cycleShop(d){ shop.sel = (shop.sel + d + SHOP_ITEMS.length) % SHOP_ITEMS.length; refreshShopUI(); chime(true); }
@@ -1874,9 +1909,16 @@ function buySel(){
   const it = SHOP_ITEMS[shop.sel];
   if (owned[it.id]){ say("You've already got one of those, friend."); chime(false); return; }
   if (cash < it.price){ say("That's not enough cash. Come back when you can afford it."); chime(false); return; }
-  cash -= it.price; owned[it.id] = true; chime(true);
+  cash -= it.price; owned[it.id] = true; initAmmo(it.id); chime(true);
   say(['Pleasure doing business.', "Good choice. Don't point it at me.", 'She’s all yours.'][Math.floor(Math.random()*3)]);
   tagTex(it); setWeapon(WEAPONS.findIndex(q => q.id === it.id)); refreshShopUI(); saveGame();
+}
+function buyAmmo(){
+  const it = SHOP_ITEMS[shop.sel], spec = AMMO[it.id];
+  if (!spec || !owned[it.id]){ say('Ammo is for guns you own, friend.'); chime(false); return; }
+  if (cash < spec.price){ say("Can't cover the ammo. Come back with more cash."); chime(false); return; }
+  cash -= spec.price; ammo[it.id].res += spec.box; chime(true);
+  say('Here you go. ' + spec.box + ' rounds, and keep the change.'); refreshShopUI(); saveGame();
 }
 function startTalk(){
   shop.talk = true; shop.skipKeys = true; player.root.visible = false; $('toast').classList.remove('show');
@@ -1895,6 +1937,7 @@ function updateTalk(){
   if (once.ArrowLeft || once.KeyA) cycleShop(-1);
   if (once.ArrowRight || once.KeyD) cycleShop(1);
   if (once.Enter || once.NumpadEnter || once.KeyF) buySel();
+  if (once.KeyB) buyAmmo();
   if (once.Escape || once.KeyX || once.Backspace) endTalk();
 }
 
@@ -1932,7 +1975,7 @@ function shopCamera(dt){
   camera.lookAt(shop.ix + shop.camX*0.7, 1.7, shop.iz - 5.2);
 }
 // buttons
-for (const [id, fn] of [['shopPrev', () => cycleShop(-1)], ['shopNext', () => cycleShop(1)], ['shopBuy', buySel], ['shopLeave', endTalk]])
+for (const [id, fn] of [['shopPrev', () => cycleShop(-1)], ['shopNext', () => cycleShop(1)], ['shopBuy', buySel], ['shopAmmo', buyAmmo], ['shopLeave', endTalk]])
   $(id).addEventListener('pointerdown', e => { e.preventDefault(); if (shop.talk) fn(); });
 
 // ---------------------------------------------------------------- time of day
@@ -2263,6 +2306,7 @@ function frame(){
       if (!gunOn && touchAim){ touchAim = false; $('btnAim').classList.remove('on'); }
       $('btnAim').style.display = gunOn ? 'flex' : 'none';
       $('btnHand').style.display = player.car ? 'flex' : 'none';
+      $('btnReload').style.display = (!player.car && ammoOf(wp)) ? 'flex' : 'none';
       $('btnWeapon').textContent = wp.id === 'smg' ? 'SMG' : wp.id.charAt(0).toUpperCase() + wp.id.slice(1);
       document.body.classList.toggle('incar', !!player.car);
     }
