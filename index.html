@@ -862,7 +862,8 @@ function panic(x, z, r){
 // a crime the player has committed in view of a ped: they stop and phone the police (kill them first and nobody finds out)
 function witnessCrime(pts){
   if (player.dead) return;
-  if (COPG && COPG.members.some(m => m.alive && m.los && Math.hypot(m.x - player.x, m.z - player.z) < 60)){ addCrime(pts); return; }   // a cop saw it
+  addCrime(pts);                                       // the crime counts straight away; a witness who calls it in adds more
+  if (COPG && COPG.members.some(m => m.alive && m.los && Math.hypot(m.x - player.x, m.z - player.z) < 60)) return;   // a cop saw it
   let best = null, bd = 30, phoning = null;
   for (const p of peds){
     if (!pedLive(p) || (p.fleeT > 0 && p.state !== 'phone')) continue;
@@ -872,22 +873,86 @@ function witnessCrime(pts){
     if (d < bd){ bd = d; best = p; }
   }
   const w = phoning || best; if (!w) return;
-  w.report = (w.report || 0) + pts;
+  w.report = (w.report || 0) + pts*0.5;
   if (w.state !== 'phone'){ w.state = 'phone'; w.phoneT = 3.5; pedPhone(w, true); popText(w.x, CURB + 2.3, w.z, 'CALLING', '#ffd23a'); }
 }
-// launch a ped: dir (dx, dz) is the way they are pushed
-function ragdoll(p, dx, dz, force, lift, spin){
+// ---- ragdoll: a body thrown by an impulse (arc, tumble, slide) with limbs that flail on springs. Works on peds, gang members, cops and the player.
+const RAGB = ['UpperArmL','ForearmL','UpperArmR','ForearmR','ThighL','ShinL','ThighR','ShinR','Spine','Neck','Head'];
+const _rq = new THREE.Quaternion(), _re = new THREE.Euler();
+function ragRig(e){
+  if (e.rr) return e.rr;
+  const rr = [];
+  for (const n of RAGB){
+    let b = null; e.inner.traverse(o => { if (o.isBone && o.name === n) b = o; });
+    if (b) rr.push({b, base:new THREE.Quaternion(), a:new THREE.Vector3(), v:new THREE.Vector3(), t:new THREE.Vector3(), lim:/Forearm|Shin/.test(n) ? 1.9 : /Head|Neck|Spine/.test(n) ? 0.55 : 1.3});
+  }
+  return e.rr = rr;
+}
+function ragLimbsInit(e, force){
+  for (const r of ragRig(e)){
+    r.base.copy(r.b.quaternion); r.a.set(0, 0, 0);
+    r.v.set(Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5).multiplyScalar(Math.min(14, 3 + force*1.1));
+    r.t.set((Math.random() - 0.5)*r.lim, (Math.random() - 0.5)*r.lim*0.6, (Math.random() - 0.5)*r.lim);      // the sprawled pose they settle into
+  }
+  e.rrOn = true;
+}
+function ragLimbs(e, dt, air){
+  if (!e.rrOn) return;
+  dt = Math.min(dt, 0.04);
+  for (const r of e.rr){
+    r.v.x += (-26*(r.a.x - r.t.x) - 4.2*r.v.x)*dt; r.v.y += (-26*(r.a.y - r.t.y) - 4.2*r.v.y)*dt; r.v.z += (-26*(r.a.z - r.t.z) - 4.2*r.v.z)*dt;
+    if (air){ r.v.x += (Math.random() - 0.5)*70*dt; r.v.y += (Math.random() - 0.5)*70*dt; r.v.z += (Math.random() - 0.5)*70*dt; }
+    r.a.addScaledVector(r.v, dt);
+    r.a.x = clamp(r.a.x, -r.lim, r.lim); r.a.y = clamp(r.a.y, -r.lim, r.lim); r.a.z = clamp(r.a.z, -r.lim, r.lim);
+    _re.set(r.a.x, r.a.y, r.a.z); _rq.setFromEuler(_re); r.b.quaternion.copy(r.base).multiply(_rq);
+  }
+}
+// launch e (needs x, z, h, wrap, inner): (dx, dz) is the way they are pushed
+function ragLaunch(e, dx, dz, force, lift, spin){
   const l = Math.hypot(dx, dz) || 1; dx /= l; dz /= l;
+  e.inner.scale.y = 1;
+  e.rvx = dx*force; e.rvz = dz*force; e.ry = 0; e.rvy = lift; e.ragT = 0;
+  e.side = Math.random() < 0.5 ? -1 : 1;                              // land on the back or the front
+  e.tgt = e.side*PI/2;
+  e.h = e.side < 0 ? Math.atan2(-dx, -dz) : Math.atan2(dx, dz);       // head leads the push either way
+  e.spin = (spin || 0) + force*0.35; e.flip = 0; e.roll = (Math.random() - 0.5)*2; e.rz = 0; e.tilt = 0;
+  ragLimbsInit(e, force);
+}
+// one step; returns true when the body has come to rest
+function ragStep(e, dt){
+  const TAU = PI*2, gy = e.y !== undefined ? e.y : CURB;
+  e.ragT += dt;
+  const air = e.ry > 0.01 || e.rvy > 0;
+  if (air){
+    e.rvy -= 22*dt; e.ry += e.rvy*dt;
+    if (e.ry <= 0){ e.ry = 0; if (e.rvy < -4){ ragLimbsKick(e, -e.rvy); e.rvy = -e.rvy*0.25; e.rvx *= 0.6; e.rvz *= 0.6; } else e.rvy = 0; }
+  } else { const f = Math.exp(-dt*4.5); e.rvx *= f; e.rvz *= f; }
+  const pt = {x:e.x + e.rvx*dt, z:e.z + e.rvz*dt};
+  if (pushOut(pt, 0.3)){ e.rvx *= 0.3; e.rvz *= 0.3; }
+  e.x = pt.x; e.z = pt.z;
+  if (air){ e.flip += e.spin*dt*e.side; } else { const tg = Math.round(e.flip/TAU)*TAU; e.flip = lerp(e.flip, tg, Math.min(1, dt*10)); }
+  const fall = Math.min(1, e.ragT/0.35); e.tilt = e.tgt*(1 - Math.pow(1 - fall, 2));
+  e.rz = lerp(e.rz, air ? e.roll*0.5 : 0, Math.min(1, dt*8));
+  e.inner.rotation.x = e.tilt + e.flip; e.inner.rotation.z = e.rz; e.inner.position.y = 0.12 + Math.abs(e.tilt/(PI/2))*0.12;
+  ragLimbs(e, dt, air);
+  e.wrap.position.set(e.x, gy + e.ry, e.z); e.wrap.rotation.y = e.h;
+  if (!air && e.ragT > 0.6 && Math.hypot(e.rvx, e.rvz) < 0.5){
+    e.inner.rotation.set(e.tgt, 0, 0); e.tilt = e.tgt; e.flip = 0; e.rz = 0; e.inner.position.y = 0.24;
+    return true;
+  }
+  return false;
+}
+function ragLimbsKick(e, impact){ if (!e.rrOn) return; for (const r of e.rr) r.v.add(_rq0.set(Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5).multiplyScalar(impact*0.9)); }
+const _rq0 = new THREE.Vector3();
+function ragdoll(p, dx, dz, force, lift, spin){
   p.state = 'rag'; p.report = 0; p.phoneT = 0; p.fleeT = 0; if (p.phone) pedPhone(p, false);
-  p.inner.scale.y = 1;
-  p.rvx = dx*force; p.rvz = dz*force; p.ry = 0; p.rvy = lift; p.ragT = 0;
-  p.h = Math.atan2(-dx, -dz);                       // back to the push, so they fall away from it
-  p.spin = spin || 0; p.flip = 0; p.roll = (Math.random() - 0.5)*2; p.rz = 0; p.tx = p.x - dx*3; p.tz = p.z - dz*3;
+  p.tx = p.x - dx*3; p.tz = p.z - dz*3;
+  ragLaunch(p, dx, dz, force, lift, spin);
 }
 function hurtPed(p, dmg, dx, dz, force, lift, spin){
   if (p.state === 'dead') return;
   p.hp -= dmg;
-  if (p.hp <= 0){ p.dying = true; kills++; witnessCrime(20); force *= 1.3; }
+  if (p.hp <= 0){ p.dying = true; kills++; witnessCrime(30); force *= 1.3; }
   ragdoll(p, dx, dz, force, lift, spin);
 }
 function knock(ped, secs){ if (pedLive(ped)) hurtPed(ped, 0, ped.x - player.x, ped.z - player.z, 3, 1.5, 0); }
@@ -913,43 +978,28 @@ function updateCash(dt){
   }
 }
 function updatePeds(dt){
-  const TAU = PI*2;
   for (const p of peds){
     const st = p.state;
     if (st === 'rag'){
-      p.mixer.update(0); p.ragT += dt;
-      const air = p.ry > 0.01 || p.rvy > 0;
-      if (air){ p.rvy -= 22*dt; p.ry += p.rvy*dt; if (p.ry <= 0){ p.ry = 0; if (p.rvy < -4){ p.rvy = -p.rvy*0.25; p.rvx *= 0.6; p.rvz *= 0.6; } else p.rvy = 0; } }
-      else { const f = Math.exp(-dt*4.5); p.rvx *= f; p.rvz *= f; }
-      const pt = {x:p.x + p.rvx*dt, z:p.z + p.rvz*dt};
-      if (pushOut(pt, 0.3)){ p.rvx *= 0.3; p.rvz *= 0.3; }
-      p.x = pt.x; p.z = pt.z;
-      if (air){ p.flip += p.spin*dt; } else { const tgt = Math.round(p.flip/TAU)*TAU; p.flip = lerp(p.flip, tgt, Math.min(1, dt*10)); }
-      const fall = Math.min(1, p.ragT/0.35); p.tilt = -PI/2 * (1 - Math.pow(1 - fall, 2));
-      p.rz = lerp(p.rz, air ? p.roll*0.5 : 0, Math.min(1, dt*8));
-      p.inner.rotation.x = p.tilt + p.flip; p.inner.rotation.z = p.rz; p.inner.position.y = 0.12 + (-p.tilt/(PI/2))*0.12;
-      if (!air && p.ragT > 0.6 && Math.hypot(p.rvx, p.rvz) < 0.5){
-        p.inner.rotation.set(-PI/2, 0, 0); p.tilt = -PI/2; p.flip = 0; p.rz = 0;
+      p.mixer.update(0);
+      if (ragStep(p, dt)){
         if (p.dying){ p.state = 'dead'; p.deadT = 0; dropCash(p.x, p.z, 20 + Math.floor(Math.random()*121)); }
         else { p.state = 'down'; p.t = 3.5 + Math.random()*3; }
       }
-      p.wrap.position.set(p.x, CURB + p.ry, p.z); p.wrap.rotation.y = p.h; continue;
+      continue;
     }
     if (st === 'dead'){
-      p.mixer.update(0); p.deadT += dt;
+      p.mixer.update(0); p.deadT += dt; ragLimbs(p, dt, false);
       if (p.deadT > 30) p.wrap.visible = false;
       if (p.deadT > 45 && Math.hypot(p.x - player.x, p.z - player.z) > 40){     // a new pedestrian takes their place
-        p.hp = 30; p.dying = false; p.state = 'walk'; p.tilt = 0; p.inner.rotation.set(0, 0, 0); p.inner.position.y = 0; p.inner.scale.y = 1;
+        p.hp = 30; p.dying = false; p.state = 'walk'; p.rrOn = false; p.tilt = 0; p.inner.rotation.set(0, 0, 0); p.inner.position.y = 0; p.inner.scale.y = 1;
         const q = p.corners[p.idx]; p.x = p.b.cx + q[0]; p.z = p.b.cz + q[1]; p.wrap.visible = true;
       }
       p.wrap.position.set(p.x, CURB, p.z); p.wrap.rotation.y = p.h; continue;
     }
     if (st === 'down'){
-      p.mixer.update(0);
-      p.tilt = lerp(p.tilt, -PI/2, Math.min(1, dt*10));
-      p.t -= dt;
-      if (p.t <= 0){ p.state = 'walk'; p.inner.rotation.set(0, 0, 0); p.inner.position.y = 0; p.tilt = 0; p.fleeT = 4 + Math.random()*2; setFlee(p, p.tx !== undefined ? p.tx : p.x, p.tz !== undefined ? p.tz : p.z); }
-      else { p.inner.rotation.x = p.tilt; p.inner.position.y = 0.12 + (-p.tilt/(PI/2))*0.12; }
+      p.mixer.update(0); p.t -= dt; ragLimbs(p, dt, false);
+      if (p.t <= 0){ p.state = 'walk'; p.rrOn = false; p.inner.rotation.set(0, 0, 0); p.inner.position.y = 0; p.tilt = 0; p.fleeT = 4 + Math.random()*2; setFlee(p, p.tx !== undefined ? p.tx : p.x, p.tz !== undefined ? p.tz : p.z); }
       p.wrap.position.set(p.x, CURB, p.z); p.wrap.rotation.y = p.h; continue;
     }
     // upright states
@@ -1311,11 +1361,11 @@ function updateGrenades(dt){
 function grenadeBlast(x, z, b){
   b = b || GREN_BLAST; const R = b.r, dm = b.dmg;
   explodeAt(x, z, Math.max(0.8, R/4));
-  for (const p of peds){ const d = Math.hypot(p.x-x, p.z-z); if (pedLive(p) && d < R){ hurtPed(p, dm > 0 ? dm*(1 - d/R) + 12 : 0, p.x - x, p.z - z, 6 + (1 - d/R)*9, 4 + (1 - d/R)*3, 8); witnessCrime(12); } }
+  for (const p of peds){ const d = Math.hypot(p.x-x, p.z-z); if (pedLive(p) && d < R){ hurtPed(p, dm > 0 ? dm*(1 - d/R) + 12 : 0, p.x - x, p.z - z, 6 + (1 - d/R)*9, 4 + (1 - d/R)*3, 8); witnessCrime(15); } }
   if (dm > 0){
     for (const g of GANGS) if (g.members) for (const m of g.members){
       if (!m.alive) continue; const d = Math.hypot(m.x-x, m.z-z);
-      if (d < R) damageMember(m, Math.round(dm*(1-d/R) + 10), false);
+      if (d < R){ lastHit = {x:m.x - x, z:m.z - z, t:performance.now()}; damageMember(m, Math.round(dm*(1-d/R) + 10), false); }
     }
     for (const c of cars){ if (c.mode === 'player') continue; const d = Math.hypot(c.x-x, c.z-z); if (d < R) hurtCar(c, Math.round(dm*(1-d/R) + 10), null, null, true); }
     const dp = Math.hypot(player.x-x, player.z-z);
@@ -1517,11 +1567,11 @@ function blowUp(car){
   car.wrecked = true; car.burning = false; car.hp = -999; car.smoke = 2; car.burnOut = 45; car.mode = 'parked'; car.ai = null; car.v = 0;
   car.pitch = (Math.random() - 0.5)*0.3; car.roll = (Math.random() - 0.5)*0.5; car.vx = car.vz = undefined;
   tintCar(car);
-  explodeAt(x, z, 2.2);
+  explodeAt(x, z, 2.2); lastShot = {x, z, t:performance.now()};
   for (const p of peds){ const d = Math.hypot(p.x - x, p.z - z); if (pedLive(p) && d < R) hurtPed(p, 60*(1 - d/R) + 20, p.x - x, p.z - z, 8 + (1 - d/R)*10, 5, 8); }
   for (const g of GANGS) if (g.members) for (const m of g.members){
     if (!m.alive) continue; const d = Math.hypot(m.x - x, m.z - z);
-    if (d < R) damageMember(m, Math.round(70*(1 - d/R)) + 15, false);
+    if (d < R){ lastHit = {x:m.x - x, z:m.z - z, t:performance.now()}; damageMember(m, Math.round(70*(1 - d/R)) + 15, false); }
   }
   for (const c of cars){ if (c === car || c.wrecked || c.mode === 'player') continue; const d = Math.hypot(c.x - x, c.z - z); if (d < R) hurtCar(c, 80*(1 - d/R) + 12); }   // can set off the next one
   const dp = Math.hypot(player.x - x, player.z - z);
@@ -1540,8 +1590,8 @@ function hitMarker(){
 }
 function applyHit(hit, p, dmg, d){
   if (hit.kind === 'ped' || hit.kind === 'car' || hit.kind === 'dummy' || hit.kind === 'rtarget' || hit.kind === 'gang') hitMarker();
-  if (hit.kind === 'gang') gangHit(hit.obj, p, dmg);
-  if (hit.kind === 'ped'){ const hd = (p.y - CURB) > 1.5; hurtPed(hit.obj, dmg*(hd ? 2 : 1), d.x, d.z, 3 + dmg*0.2, 1 + Math.min(4, dmg*0.04), 0); witnessCrime(15); }
+  if (hit.kind === 'gang'){ lastHit = {x:d.x, z:d.z, t:performance.now()}; gangHit(hit.obj, p, dmg); }
+  if (hit.kind === 'ped'){ const hd = (p.y - CURB) > 1.5; hurtPed(hit.obj, dmg*(hd ? 2 : 1), d.x, d.z, 3 + dmg*0.2, 1 + Math.min(4, dmg*0.04), 0); witnessCrime(25); }
   else if (hit.kind === 'car') hurtCar(hit.obj, dmg*1.5, p, d, true);
   else if (hit.kind === 'dummy' || hit.kind === 'rtarget' || hit.kind === 'rprop') rangeHit(hit, p, dmg, d, dmg*0.09);
   if (hit.kind) spark(p.x, p.y, p.z, hit.kind === 'ped' ? 2 : 3);
@@ -1566,7 +1616,7 @@ function fireGun(w){
   }
   if (range.active){ range.stats.shots++; if (range.shotHit) range.stats.hits++; }
   gangAlert(player.x, player.z, 60);
-  witnessCrime(2);                                                                    // gunfire in public
+  if (peds.some(p => pedLive(p) && Math.hypot(p.x - player.x, p.z - player.z) < 30)) addCrime(3);   // gunfire in public
   w.flash.visible = true; w.flash.rotation.z = Math.random()*PI; w.flash.scale.setScalar(0.8 + Math.random()*0.7); player.flashT = 0.05;
   sfx(SFX_OF[w.id] || 'pistol'); shake = Math.min(0.09, shake + (w.id === 'shotgun' || w.id === 'autoshot' || w.id === 'sawoff' ? 0.07 : 0.03));
   player.aimT = 0.9; recoil = Math.min(1, recoil + (w.id === 'shotgun' ? 1 : 0.5));
@@ -1575,11 +1625,11 @@ function fireGun(w){
 }
 function meleeHit(w){
   const fx = Math.sin(player.h), fz = Math.cos(player.h), range = w.range || 1.7;
-  let any = false;
+  let any = false; lastHit = {x:fx, z:fz, t:performance.now()};
   for (const p of peds){
     if (!pedLive(p)) continue;
     const dx = p.x - player.x, dz = p.z - player.z, d = Math.hypot(dx, dz);
-    if (d < range && (dx*fx + dz*fz) / (d||1) > 0.35){ hurtPed(p, w.mdmg || (w.id === 'bat' ? 25 : 7), fx, fz, 4, 1.6, 0); any = true; witnessCrime(8); spark(p.x, 1.2, p.z, 2); }
+    if (d < range && (dx*fx + dz*fz) / (d||1) > 0.35){ hurtPed(p, w.mdmg || (w.id === 'bat' ? 25 : 7), fx, fz, 4, 1.6, 0); any = true; witnessCrime(12); spark(p.x, 1.2, p.z, 2); }
   }
   if (w.id === 'bat' || (w.mdmg || 0) >= 20) for (const car of cars){
     if (car.mode === 'player') continue;
@@ -1900,6 +1950,7 @@ const EW = {   // enemy weapon behaviour
   shotgun: {dmg:4.5, pellets:6, rate:2.2, range:20, pref:7,  spread:0.09, hold:'2H'},
   bat:     {dmg:12, pellets:1, rate:1.25, range:1.9, pref:1.2, spread:0, hold:'1H'}
 };
+let lastHit = {x:0, z:0, t:0}, lastShot = {x:0, z:0, t:0};
 let cash = 500, kills = 0, hurtFx = 0, lastVit = '', lastCash = null, moneyT = 0;   // you start with $500 and fists
 const _m2 = new THREE.Vector3(), _t2 = new THREE.Vector3(), _lo = new THREE.Vector3(), _ld = new THREE.Vector3(), _aimE = new THREE.Vector3();
 
@@ -1980,11 +2031,11 @@ function starsOf(h){ let n = 0; for (let i=1;i<HEAT_AT.length;i++) if (h >= HEAT
 function addCrime(pts){ if (player.dead || !(pts > 0)) return; wanted.heat = Math.min(360, wanted.heat + pts); wanted.unseen = 0; wanted.clearT = 0; }
 function parkCop(m){
   m.alive = false; m.parked = true; m.dead = 999; m.state = 'idle'; m.wrap.visible = false; m.tilt = 0; m.burst = 0;
-  m.clone.rotation.x = 0; m.clone.position.y = 0; if (m.W.flash) m.W.flash.visible = false;
+  m.clone.rotation.set(0, 0, 0); m.clone.position.y = 0; m.rrOn = false; m.ragging = false; if (m.W.flash) m.W.flash.visible = false;
 }
 function activateCop(m, x, z){
   m.alive = true; m.parked = false; m.dead = 0; m.hp = m.maxHp; m.state = 'combat'; m.react = 0.3 + Math.random()*0.5; m.lostT = 0;
-  m.tilt = 0; m.clone.rotation.x = 0; m.clone.position.y = 0; m.stun = 0; m.burst = 0; m.fireCd = 0.8 + Math.random(); m.los = false; m.losT = 0;
+  m.tilt = 0; m.clone.rotation.set(0, 0, 0); m.clone.position.y = 0; m.rrOn = false; m.ragging = false; m.limbT = 0; m.stun = 0; m.burst = 0; m.fireCd = 0.8 + Math.random(); m.los = false; m.losT = 0;
   m.x = x; m.z = z; m.lx = x; m.lz = z; m.y = groundH(x, z); m.wrap.position.set(x, m.y, z); m.wrap.visible = true;
 }
 // ---- police cars: they follow the road grid towards you, then stop and the cops inside get out
@@ -2152,6 +2203,9 @@ function die(){
   player.dead = true; player.deadT = 0; player.hp = 0; keys.Fire = false; touchAim = false; $('btnAim').classList.remove('on'); document.body.classList.remove('scoped');
   if (player.car) exitCar();
   resetWanted();
+  player.inner = hero; player.wrap = player.root; player.root.visible = true; player.ragDone = false;
+  { const recent = performance.now() - lastShot.t < 3000, dx = recent ? player.x - lastShot.x : Math.random() - 0.5, dz = recent ? player.z - lastShot.z : Math.random() - 0.5;
+    ragLaunch(player, dx, dz, 6, 3, 4); }
   player.busted = false; $('wasted').textContent = 'WASTED'; $('wasted').style.color = '';
   $('wasted').classList.add('show');
 }
@@ -2166,12 +2220,12 @@ function busted(){
 }
 function updateDead(dt){
   player.deadT += dt;
-  if (!player.busted){ hero.rotation.x = lerp(hero.rotation.x, -PI/2 * 0.98, Math.min(1, dt*6)); hero.position.y = lerp(hero.position.y, 0.12, Math.min(1, dt*6)); }
+  if (!player.busted){ if (!player.ragDone) player.ragDone = ragStep(player, dt); else ragLimbs(player, dt, false); }
   if (player.deadT > 3.8) respawn();
 }
 function respawn(){
   player.dead = false; player.hp = 100; player.x = 11; player.z = -8; player.y = CURB; player.h = PI; player.v = 0; player.aimT = -1; player.regenT = 0;
-  hero.rotation.x = 0; hero.position.y = 0; player.root.visible = true; hurtFx = 0;
+  hero.rotation.set(0, 0, 0); hero.position.y = 0; player.root.visible = true; hurtFx = 0; player.rrOn = false; player.ragDone = false;
   $('wasted').classList.remove('show'); $('wasted').textContent = 'WASTED'; $('wasted').style.color = '';
   if (player.busted){ player.busted = false; toast('Busted: fined $' + (player.fine || 0), '#8fb0ff'); }
   for (const g of GANGS){ g.alerted = false; for (const m of g.members) if (m.alive){ m.state = 'idle'; m.burst = 0; } }
@@ -2185,6 +2239,8 @@ function toast(text, color){
 function killMember(m, head){
   m.alive = false; m.dead = 0; m.state = 'dead'; kills++;
   if (m.W.flash) m.W.flash.visible = false;
+  { const recent = performance.now() - lastHit.t < 250, dx = recent ? lastHit.x : m.x - player.x, dz = recent ? lastHit.z : m.z - player.z;
+    m.inner = m.clone; m.wrap.position.y = m.y; m.ragging = true; m.limbT = 0; ragLaunch(m, dx, dz, 4 + Math.min(10, (m.lastDealt || 0)*0.22), 2.2 + Math.min(3, (m.lastDealt || 0)*0.05), 3); }
   const g = m.g;
   if (g.cop){ addCrime(60); return; }                      // killing a cop is a serious crime, and pays nothing
   const reward = head ? 150 : 100; cash += reward;
@@ -2193,7 +2249,7 @@ function killMember(m, head){
 }
 function damageMember(m, dealt, head){
   if (!m.alive) return;
-  m.hp -= dealt; m.flash = 0.15; m.stun = Math.max(m.stun, 0.12);
+  m.lastDealt = dealt; m.hp -= dealt; m.flash = 0.15; m.stun = Math.max(m.stun, 0.12);
   if (m.g.cop){ addCrime(25); wanted.hostileT = 25; }
   if (m.state === 'idle'){ m.state = 'combat'; m.react = 0.25; }
   m.g.alerted = true; m.g.alertT = 25;
@@ -2209,7 +2265,7 @@ function gangAlert(x, z, r){
 }
 function respawnZone(g){
   for (const m of g.members){
-    m.alive = true; m.hp = m.maxHp; m.state = 'idle'; m.dead = 0; m.tilt = 0; m.clone.rotation.x = 0; m.clone.position.y = 0;
+    m.alive = true; m.hp = m.maxHp; m.state = 'idle'; m.dead = 0; m.tilt = 0; m.clone.rotation.set(0, 0, 0); m.clone.position.y = 0; m.rrOn = false; m.ragging = false; m.limbT = 0;
     m.x = m.home.x; m.z = m.home.z; m.wrap.visible = true; m.burst = 0; m.stun = 0;
   }
   g.cleared = false; g.alerted = false;
@@ -2217,6 +2273,7 @@ function respawnZone(g){
 
 // ---- enemy shooting
 function enemyFire(m, dist){
+  lastShot = {x:m.x, z:m.z, t:performance.now()};
   const ew = m.ew, ty = player.car ? 1.0 : player.y + 1.15;
   m.W.muzzle.getWorldPosition(_m2);
   const mover = player.car ? Math.hypot(player.car.vx || 0, player.car.vz || 0) : player.v;
@@ -2308,7 +2365,9 @@ function updateMember(m, g, dt){
 }
 function updateCorpse(m, dt){
   m.dead += dt;
-  m.tilt = lerp(m.tilt, -PI/2, Math.min(1, dt*7)); m.clone.rotation.x = m.tilt; m.clone.position.y = (-m.tilt/(PI/2)) * 0.12;
+  if (m.ragging){ if (ragStep(m, dt)){ m.ragging = false; m.limbT = 3; } }
+  else if (m.limbT > 0){ m.limbT -= dt; ragLimbs(m, dt, false); }
+  else if (!m.rrOn){ m.tilt = lerp(m.tilt, -PI/2, Math.min(1, dt*7)); m.clone.rotation.x = m.tilt; m.clone.position.y = (-m.tilt/(PI/2)) * 0.12; }
   if (m.dead > 40) m.wrap.visible = false;
 }
 function updateGangs(dt){
@@ -2780,7 +2839,7 @@ function hijackDriver(car){
   if (bb){ best.b = bb; let bi = 0, bk = 1e9; best.corners.forEach((q, i) => { const d = Math.hypot(bb.cx + q[0] - best.x, bb.cz + q[1] - best.z); if (d < bk){ bk = d; bi = i; } }); best.idx = bi; }
   hurtPed(best, 0, fz, -fx, 5, 2.2, 0);        // yanked out sideways
   popText(best.x, CURB + 2.3, best.z, 'HIJACK', '#ff6a5a');
-  witnessCrime(30);
+  witnessCrime(35);
 }
 function enterCar(car){
   if (car.cop && car.copActive){ addCrime(40); dropCopCar(car); car.bar.visible = false; toast('Police car stolen', '#ff6a5a'); }
@@ -3065,20 +3124,35 @@ function updatePlayerCar(dt){
   };
   if (Math.abs(car.v) > 4) for (const p of peds){
     if (!pedLive(p)) continue;
-    if (bodyHit(p.x, p.z, 0)){ const v = Math.abs(car.v), sg = Math.sign(car.v) || 1; hurtPed(p, v*3.2, hx*sg + (p.x - car.x)*0.15, hz*sg + (p.z - car.z)*0.15, v*0.9, 2 + v*0.28, 5 + v*0.6); witnessCrime(25); }
+    if (bodyHit(p.x, p.z, 0)){ const v = Math.abs(car.v), sg = Math.sign(car.v) || 1; hurtPed(p, v*3.2, hx*sg + (p.x - car.x)*0.15, hz*sg + (p.z - car.z)*0.15, v*0.9, 2 + v*0.28, 5 + v*0.6); witnessCrime(30); }
   }
   if (Math.abs(car.v) > 5) for (const g of GANGS) if (g.members) for (const m of g.members){     // run gang members over
     if (!m.alive || performance.now() < (m.carCd || 0)) continue;
-    if (bodyHit(m.x, m.z, 0.1)){ m.carCd = performance.now() + 600; damageMember(m, Math.round(Math.abs(car.v)*7), false); }
+    if (bodyHit(m.x, m.z, 0.1)){ m.carCd = performance.now() + 600; lastHit = {x:hx*(Math.sign(car.v) || 1), z:hz*(Math.sign(car.v) || 1), t:performance.now()}; damageMember(m, Math.round(Math.abs(car.v)*7), false); }
   }
   if (Math.abs(car.v) > 3) rangeCar(car, hx, hz);
   player.x = car.x; player.z = car.z;
   if (once.KeyF && Math.abs(car.v) < 9) exitCar();
 }
+// moving AI cars knock down pedestrians and you
+function carHitsPeople(car){
+  const hx = Math.sin(car.h), hz = Math.cos(car.h), v = car.v, reach = car.type.front + 1.5;
+  const body = (px, pz) => { const dx = px - car.x, dz = pz - car.z, lf = dx*hx + dz*hz, ls = -dx*hz + dz*hx; return lf > -car.type.half + 0.2 && lf < car.type.front + 0.5 && Math.abs(ls) < car.type.track + 0.7; };
+  for (const p of peds){
+    if (!pedLive(p) || Math.abs(p.x - car.x) > reach || Math.abs(p.z - car.z) > reach) continue;
+    if (body(p.x, p.z)) hurtPed(p, v*3.2, hx + (p.x - car.x)*0.15, hz + (p.z - car.z)*0.15, v*0.9, 2 + v*0.28, 5 + v*0.6);
+  }
+  if (!player.car && !player.dead && performance.now() > (car.hitPlayerT || 0) && Math.abs(player.x - car.x) < reach && Math.abs(player.z - car.z) < reach && body(player.x, player.z)){
+    car.hitPlayerT = performance.now() + 900;
+    lastShot = {x:car.x, z:car.z, t:performance.now()};
+    hurtPlayer(Math.round(v*2.4)); shake = Math.min(0.2, shake + 0.12); sfx('hit');
+    const pt = {x:player.x + hx*1.6, z:player.z + hz*1.6}; pushOut(pt, 0.4); player.x = pt.x; player.z = pt.z;
+  }
+}
 function updateCars(dt){
   for (const car of cars){
     if (car.burning) burnStep(car, dt);
-    if (car.mode === 'ai') aiStep(car, dt);
+    if (car.mode === 'ai'){ aiStep(car, dt); if (car.v > 3) carHitsPeople(car); }
     else if (car.mode === 'parked' && Math.abs(car.v) > 0.05){
       car.v -= Math.sign(car.v) * Math.min(Math.abs(car.v), 9*dt);
       car.x += Math.sin(car.h)*car.v*dt; car.z += Math.cos(car.h)*car.v*dt;
