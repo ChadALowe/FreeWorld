@@ -1,5 +1,7 @@
 <title>Low Poly City</title>
 <meta name="claude:viewport-fit-sides" content="cover">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
 <style>
   :root{color-scheme:dark}
   html,body{margin:0;height:100%;background:#0d1016;color:#eef1f5;font-family:system-ui,Segoe UI,sans-serif;overflow:hidden;user-select:none;-webkit-user-select:none}
@@ -50,7 +52,15 @@
   .tbtn:active, .tbtn.down{background:rgba(255,209,102,.65);color:#15181d}
   #btnAct{width:88px;height:88px;right:max(22px,env(safe-area-inset-right,0px));bottom:max(26px,calc(env(safe-area-inset-bottom,0px) + 14px))}
   #btnWave{width:54px;height:54px;right:calc(max(22px,env(safe-area-inset-right,0px)) + 100px);bottom:max(26px,calc(env(safe-area-inset-bottom,0px) + 14px));font-size:12px}
-  #btnCar{width:68px;height:68px;right:calc(max(22px,env(safe-area-inset-right,0px)) + 14px);bottom:calc(max(26px,calc(env(safe-area-inset-bottom,0px) + 14px)) + 100px)}
+  #btnCar{width:68px;height:68px;right:calc(max(22px,env(safe-area-inset-right,0px)) + 100px);bottom:calc(max(26px,calc(env(safe-area-inset-bottom,0px) + 14px)) + 128px)}
+  #btnAim{width:62px;height:62px;right:calc(max(22px,env(safe-area-inset-right,0px)) + 14px);bottom:calc(max(26px,calc(env(safe-area-inset-bottom,0px) + 14px)) + 100px)}
+  .tbtn.on{background:rgba(255,209,102,.75);color:#15181d}
+  #fsBtn{position:fixed;z-index:6;left:max(12px,env(safe-area-inset-left,0px));top:max(12px,env(safe-area-inset-top,0px));width:42px;height:42px;border-radius:10px;border:1px solid rgba(255,255,255,.35);background:rgba(20,24,32,.55);color:#fff;font-size:20px;line-height:1;display:none;align-items:center;justify-content:center;padding:0;touch-action:none}
+  body.touch.started #fsBtn.can{display:flex}
+  body.touch #range{top:calc(max(12px,env(safe-area-inset-top,0px)) + 52px)}
+  #xhair{transition:width .12s,height .12s,margin .12s,border-color .08s,box-shadow .08s}
+  #xhair.aim{width:12px;height:12px;margin:-6px 0 0 -6px}
+  #xhair.hit{border-color:#ff4d3d;box-shadow:0 0 0 3px rgba(255,77,61,.5)}
   body.touch #mapwrap{width:104px;height:104px;border-width:2px}
   body.touch #map{width:104px;height:104px}
   body.touch #clock{top:calc(max(16px,env(safe-area-inset-top,0px)) + 110px);width:104px;font-size:12px}
@@ -61,6 +71,7 @@
   <div><b>W A S D</b> walk</div>
   <div><b>Shift</b> run</div>
   <div><b>Mouse</b> look (drag if not captured)</div>
+  <div><b>Right mouse</b> / hold Z: aim (scroll zooms)</div>
   <div><b>Q / E</b> turn camera</div>
   <div><b>Space</b> / click: attack, shoot</div>
   <div><b>1-5</b> / <b>R</b> weapons</div>
@@ -79,6 +90,8 @@
 <div id="btnAct" class="tbtn tc">Punch</div>
 <div id="btnWave" class="tbtn tc">Wave</div>
 <div id="btnWeapon" class="tbtn tc">Fists</div>
+<div id="btnAim" class="tbtn tc" style="display:none">Aim</div>
+<button id="fsBtn" aria-label="Toggle fullscreen">&#x26F6;</button>
 <div id="xhair" class="hud"></div>
 <div id="weapon" class="hud">Fists</div>
 <div id="btnCar" class="tbtn tc" style="display:none">Drive</div>
@@ -470,20 +483,28 @@ let yaw = 0.5, pitch = 0.32, locked = false, dragging = false, lastLook = 0;
 document.addEventListener('pointerlockchange', () => { locked = document.pointerLockElement === canvas; });
 let lastTouch = -9999;
 const fromTouch = () => performance.now() - lastTouch < 800;
+let zoom = 1, aimHeld = false, camAim = 0, aimFov = 38, touchAim = false;
+const lookSens = () => camera.fov / 60;                  // slower look while zoomed in
+canvas.addEventListener('contextmenu', e => e.preventDefault());
 canvas.addEventListener('mousedown', e => {
   if (fromTouch()) return;
   canvas.focus();
+  if (e.button === 2){ aimHeld = true; return; }          // right mouse: aim
   if (locked){ if (e.button === 0){ keys.Fire = true; once.Fire = true; } } else dragging = true;
 });
-addEventListener('mouseup', () => { dragging = false; keys.Fire = false; });
+addEventListener('mouseup', e => { if (e.button === 2) aimHeld = false; else { dragging = false; keys.Fire = false; } });
 addEventListener('mousemove', e => {
   if (fromTouch()) return;
   if (locked || dragging){
-    yaw -= (e.movementX||0) * 0.0026; pitch = clamp(pitch + (e.movementY||0) * 0.0026, -0.2, 1.3); lastLook = performance.now();
+    const s = lookSens();
+    yaw -= (e.movementX||0) * 0.0026 * s; pitch = clamp(pitch + (e.movementY||0) * 0.0026 * s, -0.4, 1.3); lastLook = performance.now();
   }
 });
-canvas.addEventListener('wheel', e => { zoom = clamp(zoom + Math.sign(e.deltaY)*0.12, 0.6, 2.2); e.preventDefault(); }, {passive:false});
-let zoom = 1;
+canvas.addEventListener('wheel', e => {
+  if (camAim > 0.5) aimFov = clamp(aimFov + Math.sign(e.deltaY)*3, 22, 52);   // zoom further in or out while aiming
+  else zoom = clamp(zoom + Math.sign(e.deltaY)*0.12, 0.6, 2.2);
+  e.preventDefault();
+}, {passive:false});
 
 // ---- touch controls: floating stick on the left, drag-to-look on the right, action buttons
 const joy = {x:0, y:0, mag:0};
@@ -523,7 +544,8 @@ let touchGas = false, touchBrake = false;
   });
   canvas.addEventListener('pointermove', e => {
     if (e.pointerId !== lid) return;
-    yaw -= (e.clientX - lx) * 0.0058; pitch = clamp(pitch + (e.clientY - ly) * 0.0046, -0.2, 1.3);
+    const s = lookSens();
+    yaw -= (e.clientX - lx) * 0.0058 * s; pitch = clamp(pitch + (e.clientY - ly) * 0.0046 * s, -0.4, 1.3);
     lx = e.clientX; ly = e.clientY; lastLook = performance.now(); lastTouch = performance.now();
   });
   const lend = e => { if (e.pointerId === lid) lid = null; };
@@ -536,6 +558,7 @@ let touchGas = false, touchBrake = false;
   };
   press($('btnAct'), () => { if (player.car) touchGas = true; else { keys.Fire = true; once.Fire = true; } }, () => { touchGas = false; keys.Fire = false; });
   press($('btnWeapon'), () => { once.KeyR = true; });
+  press($('btnAim'), () => { touchAim = !touchAim; $('btnAim').classList.toggle('on', touchAim); });
   press($('btnWave'), () => { if (player.car) touchBrake = true; else once.KeyH = true; }, () => { touchBrake = false; });
   press($('btnCar'),  () => { once.KeyF = true; });
   document.addEventListener('contextmenu', e => { if (TOUCH) e.preventDefault(); });
@@ -935,7 +958,11 @@ function hurtCar(car, dmg){
   car.hp = (car.hp === undefined ? 60 : car.hp) - dmg;
   if (car.hp <= 0 && !car.wrecked) wreck(car);
 }
+function hitMarker(){
+  const x = $('xhair'); x.classList.add('hit'); clearTimeout(hitMarker.t); hitMarker.t = setTimeout(() => x.classList.remove('hit'), 120);
+}
 function applyHit(hit, p, dmg, d){
+  if (hit.kind === 'ped' || hit.kind === 'car' || hit.kind === 'dummy' || hit.kind === 'rtarget') hitMarker();
   if (hit.kind === 'ped') knock(hit.obj, 8);
   else if (hit.kind === 'car') hurtCar(hit.obj, dmg);
   else if (hit.kind === 'dummy' || hit.kind === 'rtarget' || hit.kind === 'rprop') rangeHit(hit, p, dmg, d, dmg*0.09);
@@ -949,7 +976,8 @@ function fireGun(w){
   range.shotHit = false;
   for (let k=0;k<w.pellets;k++){
     const d = base.clone();
-    d.x += (Math.random()-.5)*2*w.spread; d.y += (Math.random()-.5)*2*w.spread; d.z += (Math.random()-.5)*2*w.spread; d.normalize();
+    const sp = w.spread * (1 - 0.65*camAim);            // aiming tightens the spread
+    d.x += (Math.random()-.5)*2*sp; d.y += (Math.random()-.5)*2*sp; d.z += (Math.random()-.5)*2*sp; d.normalize();
     const hit = castRay(origin, d, 140);
     const p = origin.clone().addScaledVector(d, hit.t);
     if (k < 3) addTracer(_m, p);
@@ -1367,6 +1395,7 @@ function updatePlayerFoot(dt){
   let target = len > 0.1 ? (running ? 6.2 : 2.1) : 0;
   if (player.oneShot === 'Punch' || player.swing) target *= 0.25;
   else if (player.aimT > 0) target = Math.min(target, 3.2);
+  if (camAim > 0.5){ player.aimT = Math.max(player.aimT, 0.25); target = Math.min(target, 2.0); }   // aiming: face the crosshair, walk only
   player.v += (target - player.v) * Math.min(1, dt*10);
   if (len > 0.1){
     mx /= len; mz /= len;
@@ -1439,14 +1468,19 @@ function updateCamera(dt){
   let fx = inCar ? player.car.x : player.x, fz = inCar ? player.car.z : player.z;
   const fy = inCar ? 1.5 : player.y + 1.55;
   // over-the-shoulder view while a gun is out, so the crosshair is not hidden behind the player
-  shoulder = lerp(shoulder, (!inCar && WEAPONS[player.weapon].kind === 'gun') ? 0.6 : 0, Math.min(1, dt*6));
+  // and a GTA IV style aim: hold right mouse / Z / the Aim button to pull in tight over the shoulder and zoom
+  const gunOut = !inCar && WEAPONS[player.weapon].kind === 'gun';
+  camAim = lerp(camAim, (gunOut && (aimHeld || keys.KeyZ || touchAim)) ? 1 : 0, Math.min(1, dt*9));
+  shoulder = lerp(shoulder, gunOut ? lerp(0.6, 0.85, camAim) : 0, Math.min(1, dt*6));
+  const fovT = lerp(60, aimFov, camAim);
+  if (Math.abs(camera.fov - fovT) > 0.05){ camera.fov = fovT; camera.updateProjectionMatrix(); }
   fx += Math.cos(yaw) * shoulder; fz -= Math.sin(yaw) * shoulder;
   if (inCar){
     const car = player.car;
     if (performance.now() - lastLook > 1500 && Math.abs(car.v) > 2)
       yaw += angDiff(yaw, car.h + PI + (car.v < 0 ? PI : 0)) * Math.min(1, dt*2.2);
   }
-  const want = (inCar ? 9.5 : 4.6) * zoom;
+  const want = inCar ? 9.5 * zoom : lerp(4.6 * zoom, 2.0, camAim);
   camTarget.set(fx, fy, fz);
   const dir = new THREE.Vector3(Math.sin(yaw)*Math.cos(pitch), Math.sin(pitch), Math.cos(yaw)*Math.cos(pitch));
   // pull the camera in when buildings are in the way
@@ -1457,7 +1491,7 @@ function updateCamera(dt){
     if (!blocked) for (const b of boxes){ if (x>b.minx-0.3 && x<b.maxx+0.3 && z>b.minz-0.3 && z<b.maxz+0.3 && y<b.h){ blocked = true; break; } }
     if (blocked){ dist = Math.max(1.2, d-0.8); break; }
   }
-  camDist = lerp(camDist, dist, Math.min(1, dt*(dist < camDist ? 18 : 3)));
+  camDist = lerp(camDist, dist, Math.min(1, dt*(dist < camDist ? 18 : 6)));
   camera.position.set(fx + dir.x*camDist, Math.max(0.5, fy + dir.y*camDist), fz + dir.z*camDist);
   camera.lookAt(camTarget);
   if (shake > 0.002){ camera.position.x += (Math.random()-.5)*shake; camera.position.y += (Math.random()-.5)*shake; }
@@ -1489,10 +1523,14 @@ function frame(){
       $('btnWave').style.display = (player.car || wp.id === 'fists') ? 'flex' : 'none';
       $('btnAct').textContent = player.car ? 'Gas' : (wp.kind === 'gun' ? 'Fire' : wp.id === 'bat' ? 'Swing' : 'Punch');
       $('btnWeapon').style.display = player.car ? 'none' : 'flex';
+      const gunOn = !player.car && wp.kind === 'gun';
+      if (!gunOn && touchAim){ touchAim = false; $('btnAim').classList.remove('on'); }
+      $('btnAim').style.display = gunOn ? 'flex' : 'none';
       $('btnWeapon').textContent = wp.id === 'smg' ? 'SMG' : wp.id.charAt(0).toUpperCase() + wp.id.slice(1);
       document.body.classList.toggle('incar', !!player.car);
     }
     updateCars(dt); updatePeds(dt); updateEffects(dt); updateRange(dt); updateSky(dt); updateCamera(dt); drawMap();
+    $('xhair').classList.toggle('aim', camAim > 0.5);
     for (const k in once) once[k] = false;
   }
   renderer.render(scene, camera);
@@ -1515,5 +1553,22 @@ $('start').addEventListener('click', () => {
   $('hint').classList.add('show'); setTimeout(() => $('hint').classList.remove('show'), 10000);
   $('rangeReset').addEventListener('pointerdown', e => { e.preventDefault(); resetRange(); });
   if (!TOUCH) try { const p = canvas.requestPointerLock(); if (p && p.catch) p.catch(()=>{}); } catch(e){}
+  if (TOUCH) goFullscreen();      // on phones the start tap also takes the game fullscreen
 });
+// fullscreen: needs a tap, so it is asked for on "Tap to play" and from the button; some phones (iPhone) refuse it
+function fsEl(){ return document.fullscreenElement || document.webkitFullscreenElement; }
+function goFullscreen(){
+  const el = document.documentElement, rq = el.requestFullscreen || el.webkitRequestFullscreen;
+  if (!rq) return;
+  try {
+    const p = rq.call(el, {navigationUI:'hide'});
+    const lock = () => { try { if (screen.orientation && screen.orientation.lock) screen.orientation.lock('landscape').catch(()=>{}); } catch(e){} };
+    if (p && p.then) p.then(lock).catch(()=>{}); else lock();
+  } catch(e){}
+}
+{
+  const can = !!(document.fullscreenEnabled || document.webkitFullscreenEnabled);
+  const b = $('fsBtn'); if (can) b.classList.add('can');
+  b.addEventListener('pointerdown', e => { e.preventDefault(); if (fsEl()){ try { (document.exitFullscreen || document.webkitExitFullscreen).call(document); } catch(err){} } else goFullscreen(); });
+}
 </script>
