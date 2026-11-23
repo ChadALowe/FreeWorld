@@ -950,18 +950,22 @@ function holdWeapon(ent, B, w, stance, aimK, aimDir, dt){
   const k = Math.min(1, dt*10);
   ent.ik  = lerp(ent.ik  || 0, (shown && w.grip) ? 1 : 0, k);
   ent.rik = lerp(ent.rik || 0, (shown && stance) ? 1 : 0, k);
+  // recoil kick: rises fast, settles slowly, so the gun visibly lifts and drops back instead of snapping
+  const rt = ent.recoil || 0, ks = ent.kickS || 0;
+  ent.kickS = lerp(ks, rt, Math.min(1, dt*(rt > ks ? 45 : 9)));
+  const kick = ent.kickS;
   if (ent.ik < 0.01 && ent.rik < 0.01) return;
   ent.root.updateMatrixWorld(true);
   const fx = Math.sin(ent.h), fz = Math.cos(ent.h), rx = -fz, rz = fx;      // body forward and right (xz)
   if (ent.rik >= 0.01 && stance){
-    const rr = lerp(stance.carry[0], stance.aim[0], aimK), uu = lerp(stance.carry[1], stance.aim[1], aimK),
-          ff = lerp(stance.carry[2], stance.aim[2], aimK) - (ent.recoil || 0)*0.06;
+    const rr = lerp(stance.carry[0], stance.aim[0], aimK), uu = lerp(stance.carry[1], stance.aim[1], aimK) + kick*0.07*aimK,
+          ff = lerp(stance.carry[2], stance.aim[2], aimK) - kick*0.10*aimK;
     _T.set(ent.x + rx*rr + fx*ff, ent.y + uu, ent.z + rz*rr + fz*ff);
     _pole.set(rx*0.7, -1, rz*0.7).normalize();
     const qH0 = B.WR.quaternion.clone();
     solveArm(B.SR, B.ER, B.WR, _T, _pole, ent.rik);
     // point the weapon: where the owner aims, or body-forward with a downward pitch at low ready
-    _D.copy(aimDir);
+    _D.copy(aimDir); _D.y += kick*0.5*aimK;                                    // muzzle flips up with the kick
     _Dc.set(fx*Math.cos(stance.carryPitch), Math.sin(stance.carryPitch), fz*Math.cos(stance.carryPitch));
     _D.multiplyScalar(aimK).addScaledVector(_Dc, 1 - aimK).normalize();
     _bz.copy(_D); _bx.set(0,1,0).cross(_bz).normalize(); _by.crossVectors(_bz, _bx);
@@ -1000,7 +1004,7 @@ function solveArms(dt){
   player.aimK = lerp(player.aimK || 0, (gun && player.aimT > 0 && rl < 0.01) ? 1 : 0, Math.min(1, dt*9));
   player.recoil = recoil;
   const cp = Math.cos(pitch);
-  _Dp.set(-Math.sin(yaw)*cp, -Math.sin(pitch) + recoil*0.12, -Math.cos(yaw)*cp);
+  _Dp.set(-Math.sin(yaw)*cp, -Math.sin(pitch), -Math.cos(yaw)*cp);
   holdWeapon(player, ikBones, wp, gun, player.aimK, _Dp, dt);
 }
 
@@ -1217,7 +1221,7 @@ function updateEffects(dt){
     if (p.life <= 0) p.o.visible = false;
   }
   if (player.flashT > 0){ player.flashT -= dt; if (player.flashT <= 0) WEAPONS.forEach(w => { if (w.flash) w.flash.visible = false; }); }
-  shake *= Math.exp(-dt*16); recoil *= Math.exp(-dt*12);
+  shake *= Math.exp(-dt*16); recoil *= Math.exp(-dt*8);
 }
 
 // ---- ray casting (bullets)
