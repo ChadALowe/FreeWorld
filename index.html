@@ -72,6 +72,14 @@
   #hint{left:50%;top:calc(max(14px,env(safe-area-inset-top,0px)) + 66px);transform:translateX(-50%);background:rgba(10,13,18,.78);border-left:3px solid #ff8a00;padding:8px 14px;border-radius:8px;font-size:13px;display:none;max-width:70vw;text-align:center}
   #hint.show{display:block}
   #xhair{left:50%;top:50%;width:20px;height:20px;margin:-10px 0 0 -10px;border:2px solid rgba(255,255,255,.9);border-radius:50%;box-shadow:0 0 0 1px rgba(0,0,0,.45);display:none}
+  #scope{position:fixed;inset:0;z-index:3;pointer-events:none;display:none;
+    background:radial-gradient(circle at 50% 50%, rgba(0,0,0,0) 0, rgba(0,0,0,0) calc(min(46vw,46vh) - 3px), #000 min(46vw,46vh), #000 100%)}
+  #scope::before,#scope::after{content:"";position:absolute;left:50%;top:50%;background:rgba(0,0,0,.85)}
+  #scope::before{width:2px;height:calc(min(46vw,46vh)*2);transform:translate(-1px,-50%)}
+  #scope::after{height:2px;width:calc(min(46vw,46vh)*2);transform:translate(-50%,-1px)}
+  #scopeDot{position:absolute;left:50%;top:50%;width:6px;height:6px;margin:-3px 0 0 -3px;border-radius:50%;background:#ff3b30}
+  body.scoped #scope{display:block}
+  body.scoped #xhair{display:none!important}
   #xhair::after{content:"";position:absolute;left:50%;top:50%;width:4px;height:4px;margin:-2px 0 0 -2px;background:#ff5a4a;border-radius:50%}
   #weapon{left:50%;bottom:max(14px,env(safe-area-inset-bottom,0px));transform:translateX(-50%);font-size:13px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;background:rgba(10,13,18,.6);padding:5px 12px;border-radius:6px;display:none}
   body.started #weapon{display:block}
@@ -101,6 +109,7 @@
   #btnWave{width:54px;height:54px;right:calc(max(22px,env(safe-area-inset-right,0px)) + 100px);bottom:max(26px,calc(env(safe-area-inset-bottom,0px) + 14px));font-size:12px}
   #btnCar{width:68px;height:68px;right:calc(max(22px,env(safe-area-inset-right,0px)) + 100px);bottom:calc(max(26px,calc(env(safe-area-inset-bottom,0px) + 14px)) + 128px)}
   #btnAim{width:62px;height:62px;right:calc(max(22px,env(safe-area-inset-right,0px)) + 14px);bottom:calc(max(26px,calc(env(safe-area-inset-bottom,0px) + 14px)) + 100px)}
+  #btnFire2{width:84px;height:84px;left:max(22px,env(safe-area-inset-left,0px));bottom:calc(max(26px,calc(env(safe-area-inset-bottom,0px) + 14px)) + 150px);z-index:7}
   .tbtn.on{background:rgba(255,209,102,.75);color:#15181d}
   #btnHand{width:66px;height:66px;font-size:11px;right:calc(max(22px,env(safe-area-inset-right,0px)) + 12px);bottom:calc(max(26px,calc(env(safe-area-inset-bottom,0px) + 14px)) + 100px);background:rgba(150,40,40,.6)}
   #btnHand.down{background:rgba(255,90,74,.85);color:#fff}
@@ -157,9 +166,11 @@
 <div id="btnWave" class="tbtn tc">Wave</div>
 <div id="btnWeapon" class="tbtn tc">Fists</div>
 <div id="btnAim" class="tbtn tc" style="display:none">Aim</div>
+<div id="btnFire2" class="tbtn tc" style="display:none">Fire</div>
 <div id="btnHand" class="tbtn tc" style="display:none">Hand<br>brake</div>
 <div id="btnReload" class="tbtn tc" style="display:none">Reload</div>
 <button id="fsBtn" aria-label="Toggle fullscreen">&#x26F6;</button>
+<div id="scope"><div id="scopeDot"></div></div>
 <div id="xhair" class="hud"></div>
 <div id="weapon" class="hud">Fists</div>
 <div id="btnCar" class="tbtn tc" style="display:none">Drive</div>
@@ -638,7 +649,7 @@ let yaw = 0.5, pitch = 0.32, locked = false, dragging = false, lastLook = 0;
 document.addEventListener('pointerlockchange', () => { locked = document.pointerLockElement === canvas; });
 let lastTouch = -9999;
 const fromTouch = () => performance.now() - lastTouch < 800;
-let zoom = 1, aimHeld = false, camAim = 0, aimFov = 38, touchAim = false;
+let zoom = 1, aimHeld = false, camAim = 0, aimFov = 38, scopeFov = 7, touchAim = false, scopeHid = false;
 const lookSens = () => camera.fov / 60;                  // slower look while zoomed in
 canvas.addEventListener('contextmenu', e => e.preventDefault());
 canvas.addEventListener('mousedown', e => {
@@ -659,7 +670,8 @@ addEventListener('mousemove', e => {
   }
 });
 canvas.addEventListener('wheel', e => {
-  if (camAim > 0.5) aimFov = clamp(aimFov + Math.sign(e.deltaY)*3, 22, 52);   // zoom further in or out while aiming
+  if (camAim > 0.5 && WEAPONS[player.weapon].id === 'sniper') scopeFov = clamp(scopeFov + Math.sign(e.deltaY)*1.5, 3, 14);   // sniper scope zoom
+  else if (camAim > 0.5) aimFov = clamp(aimFov + Math.sign(e.deltaY)*3, 22, 52);   // zoom further in or out while aiming
   else zoom = clamp(zoom + Math.sign(e.deltaY)*0.12, 0.6, 2.2);
   e.preventDefault();
 }, {passive:false});
@@ -715,6 +727,7 @@ let touchGas = false, touchBrake = false;
     el.addEventListener('pointerup', end); el.addEventListener('pointercancel', end);
   };
   press($('btnAct'), () => { if (player.car) touchGas = true; else { keys.Fire = true; once.Fire = true; } }, () => { touchGas = false; keys.Fire = false; });
+  press($('btnFire2'), () => { keys.Fire = true; once.Fire = true; }, () => { keys.Fire = false; });
   press($('btnWeapon'), () => { once.KeyR = true; });
   press($('btnAim'), () => { touchAim = !touchAim; $('btnAim').classList.toggle('on', touchAim); });
   press($('btnHand'), () => { touchHB = true; }, () => { touchHB = false; });
@@ -1736,7 +1749,7 @@ function hurtPlayer(dmg){
 }
 function die(){
   if (player.dead) return;
-  player.dead = true; player.deadT = 0; player.hp = 0; keys.Fire = false; touchAim = false; $('btnAim').classList.remove('on');
+  player.dead = true; player.deadT = 0; player.hp = 0; keys.Fire = false; touchAim = false; $('btnAim').classList.remove('on'); document.body.classList.remove('scoped');
   if (player.car) exitCar();
   $('wasted').classList.add('show');
 }
@@ -1893,6 +1906,7 @@ function updateGangs(dt){
     if (g.cleared && now - g.clearedAt > 150000 && g.dist > 80) respawnZone(g);
     for (const m of g.members){
       if (!m.alive){ updateCorpse(m, dt); continue; }
+      m.wrap.visible = Math.hypot(player.x - m.x, player.z - m.z) < 130;
       if (g.dist > 150 && !g.alerted) continue;         // far away: they just stand there
       updateMember(m, g, dt);
     }
@@ -2658,9 +2672,14 @@ function updateCamera(dt){
   // and a GTA IV style aim: hold right mouse / Z / the Aim button to pull in tight over the shoulder and zoom
   const gunOut = !inCar && WEAPONS[player.weapon].kind === 'gun';
   camAim = lerp(camAim, (gunOut && (aimHeld || keys.KeyZ || touchAim)) ? 1 : 0, Math.min(1, dt*9));
-  shoulder = lerp(shoulder, gunOut ? lerp(0.6, 0.85, camAim) : 0, Math.min(1, dt*6));
+  const sniperOn = gunOut && WEAPONS[player.weapon].id === 'sniper';
+  const scoped = sniperOn && camAim > 0.8;                                  // looking down the scope
+  document.body.classList.toggle('scoped', scoped);
+  shoulder = lerp(shoulder, gunOut ? (sniperOn ? lerp(0.6, 0, camAim) : lerp(0.6, 0.85, camAim)) : 0, Math.min(1, dt*6));
+  if (scoped){ player.root.visible = false; scopeHid = true; }                // first person: hide the body so it is not in the lens
+  else if (scopeHid && !player.car && !shop.frozen && !shop.talk){ player.root.visible = true; scopeHid = false; }
   camSpd = lerp(camSpd, inCar ? clamp(Math.abs(player.car.v)/40, 0, 1) : 0, Math.min(1, dt*2));
-  const fovT = lerp(60, aimFov, camAim) + camSpd*12;      // widen the view with speed
+  const fovT = lerp(60, sniperOn ? scopeFov : aimFov, camAim) + camSpd*12;      // widen the view with speed
   if (Math.abs(camera.fov - fovT) > 0.05){ camera.fov = fovT; camera.updateProjectionMatrix(); }
   fx += Math.cos(yaw) * shoulder; fz -= Math.sin(yaw) * shoulder;
   if (inCar){
@@ -2675,7 +2694,7 @@ function updateCamera(dt){
       }
     }
   }
-  const want = inCar ? (9.5 + camSpd*2.4) * zoom : lerp(4.6 * zoom, 2.0, camAim);
+  const want = inCar ? (9.5 + camSpd*2.4) * zoom : lerp(4.6 * zoom, sniperOn ? 0.15 : 2.0, camAim);
   camTarget.set(fx, fy, fz);
   const dir = new THREE.Vector3(Math.sin(yaw)*Math.cos(pitch), Math.sin(pitch), Math.cos(yaw)*Math.cos(pitch));
   // pull the camera in when buildings are in the way
@@ -2694,8 +2713,20 @@ function updateCamera(dt){
 }
 
 const clock = new THREE.Clock();
+let frameN = 0, ftAvg = 1/60, prNow = renderer.getPixelRatio(), prCool = 0;
+const PR_MAX = prNow, PR_MIN = TOUCH ? 0.75 : 1;
 function frame(){
-  const dt = Math.min(clock.getDelta(), 0.05);
+  const rawDt = clock.getDelta(), dt = Math.min(rawDt, 0.05);
+  frameN++;
+  ftAvg += (Math.min(rawDt, 0.2) - ftAvg) * 0.05;
+  // adaptive resolution: drop the render scale when frames take too long, creep back up when there is headroom
+  prCool -= rawDt;
+  if (prCool <= 0 && started){
+    if (ftAvg > 0.026 && prNow > PR_MIN){ prNow = Math.max(PR_MIN, prNow - 0.15); renderer.setPixelRatio(prNow); resize(); prCool = 1.5; }
+    else if (ftAvg < 0.019 && prNow < PR_MAX){ prNow = Math.min(PR_MAX, prNow + 0.1); renderer.setPixelRatio(prNow); resize(); prCool = 4; }
+  }
+  // slow frames: refresh the shadow map every other frame
+  renderer.shadowMap.autoUpdate = !(TOUCH && ftAvg > 0.022 && (frameN & 1));
   if (ready && started){
     if (keys.KeyQ) { yaw += 1.8*dt; lastLook = performance.now(); }
     if (keys.KeyE) { yaw -= 1.8*dt; lastLook = performance.now(); }
@@ -2730,12 +2761,13 @@ function frame(){
       const gunOn = !player.car && wp.kind === 'gun';
       if (!gunOn && touchAim){ touchAim = false; $('btnAim').classList.remove('on'); }
       $('btnAim').style.display = gunOn ? 'flex' : 'none';
+      $('btnFire2').style.display = (gunOn && touchAim) ? 'flex' : 'none';
       $('btnHand').style.display = player.car ? 'flex' : 'none';
       $('btnReload').style.display = (!player.car && ammoOf(wp)) ? 'flex' : 'none';
       $('btnWeapon').textContent = wp.id === 'smg' ? 'SMG' : wp.id.charAt(0).toUpperCase() + wp.id.slice(1);
       document.body.classList.toggle('incar', !!player.car);
     }
-    updateCars(dt); updatePeds(dt); updateEffects(dt); updateDriftFx(dt); updateRange(dt); updateShop(dt); updateGangs(dt); updateVitals(dt); updateSky(dt); updateCamera(dt); drawMap();
+    updateCars(dt); updatePeds(dt); updateEffects(dt); updateDriftFx(dt); updateRange(dt); updateShop(dt); updateGangs(dt); updateVitals(dt); updateSky(dt); updateCamera(dt); if (frameN % 3 === 0) drawMap();
     $('xhair').classList.toggle('aim', camAim > 0.5);
     for (const k in once) once[k] = false;
   }
