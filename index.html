@@ -19,7 +19,25 @@
   #start p{margin:0;color:#aab3bf;max-width:420px;line-height:1.5;font-size:14px}
   #start .go{margin-top:8px;background:#ffd166;color:#15181d;font-weight:700;padding:12px 26px;border-radius:8px;font-size:16px}
   #start .go[disabled]{opacity:.5}
-  #pause{position:fixed;inset:0;display:none}
+  /* touch controls */
+  .tc{display:none}
+  body.touch.started .tc{display:flex}
+  body.touch #help, body.touch #prompt{display:none!important}
+  body.touch #start .kb{display:none}
+  #start .tch{display:none}
+  body.touch #start .tch{display:block}
+  #joyzone{position:fixed;left:0;bottom:0;width:46%;height:70%;z-index:5;touch-action:none}
+  #joybase{position:fixed;width:120px;height:120px;margin:-60px 0 0 -60px;border-radius:50%;background:rgba(255,255,255,.12);border:2px solid rgba(255,255,255,.35);pointer-events:none;z-index:6;display:none}
+  #joyknob{position:absolute;left:50%;top:50%;width:54px;height:54px;margin:-27px 0 0 -27px;border-radius:50%;background:rgba(255,255,255,.55)}
+  .tbtn{position:fixed;z-index:6;border-radius:50%;align-items:center;justify-content:center;color:#fff;font-weight:700;font-size:14px;background:rgba(20,24,32,.55);border:2px solid rgba(255,255,255,.5);touch-action:none;text-align:center;line-height:1.1}
+  .tbtn:active, .tbtn.down{background:rgba(255,209,102,.65);color:#15181d}
+  #btnAct{width:88px;height:88px;right:max(22px,env(safe-area-inset-right,0px));bottom:max(26px,calc(env(safe-area-inset-bottom,0px) + 14px))}
+  #btnWave{width:54px;height:54px;right:calc(max(22px,env(safe-area-inset-right,0px)) + 100px);bottom:max(26px,calc(env(safe-area-inset-bottom,0px) + 14px));font-size:12px}
+  #btnCar{width:68px;height:68px;right:calc(max(22px,env(safe-area-inset-right,0px)) + 14px);bottom:calc(max(26px,calc(env(safe-area-inset-bottom,0px) + 14px)) + 100px)}
+  body.touch #mapwrap{width:104px;height:104px;border-width:2px}
+  body.touch #map{width:104px;height:104px}
+  body.touch #clock{top:calc(max(16px,env(safe-area-inset-top,0px)) + 110px);width:104px;font-size:12px}
+  body.touch #speed{left:50%;transform:translateX(-50%);bottom:max(16px,env(safe-area-inset-bottom,0px));font-size:28px}
 </style>
 <canvas id="c" tabindex="0"></canvas>
 <div id="help" class="hud">
@@ -36,9 +54,15 @@
 <div id="clock" class="hud"></div>
 <div id="speed" class="hud"><span id="kmh">0</span><small>km/h</small></div>
 <div id="prompt" class="hud"><b>F</b> to drive</div>
+<div id="joyzone" class="tc"></div>
+<div id="joybase" class="tc"><div id="joyknob"></div></div>
+<div id="btnAct" class="tbtn tc">Punch</div>
+<div id="btnWave" class="tbtn tc">Wave</div>
+<div id="btnCar" class="tbtn tc" style="display:none">Drive</div>
 <div id="start">
   <h1>LOW POLY CITY</h1>
   <p>Walk the streets, steal a car, knock over pedestrians, watch the day turn to night.</p>
+  <p class="tch">Left thumb: move. Drag anywhere on the right to look around. Works best in landscape.</p>
   <div class="go" id="go" disabled>Loading…</div>
 </div>
 
@@ -57,8 +81,10 @@ const R = (a,b) => a + (b-a)*rnd();
 
 // ---------------------------------------------------------------- renderer
 const canvas = $('c');
-const renderer = new THREE.WebGLRenderer({canvas, antialias:true});
-renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+const TOUCH = matchMedia('(pointer:coarse)').matches || /[?&]touch\b/.test(location.search);
+if (TOUCH) document.body.classList.add('touch');
+const renderer = new THREE.WebGLRenderer({canvas, antialias:!TOUCH});
+renderer.setPixelRatio(Math.min(devicePixelRatio, TOUCH ? 1.5 : 2));
 renderer.outputEncoding = THREE.sRGBEncoding;
 renderer.shadowMap.enabled = true;
 const scene = new THREE.Scene();
@@ -70,7 +96,7 @@ const hemi = new THREE.HemisphereLight(0xdfeeff, 0x3a3f36, 0.6);
 scene.add(hemi);
 const sun = new THREE.DirectionalLight(0xfff2d8, 1.0);
 sun.castShadow = true;
-sun.shadow.mapSize.set(2048, 2048);
+sun.shadow.mapSize.set(TOUCH ? 1024 : 2048, TOUCH ? 1024 : 2048);
 Object.assign(sun.shadow.camera, {left:-50, right:50, top:50, bottom:-50, near:1, far:260});
 sun.shadow.bias = -0.0006;
 scene.add(sun); scene.add(sun.target);
@@ -394,18 +420,76 @@ addEventListener('keyup', e => { keys[e.code] = false; });
 addEventListener('blur', () => { for (const k in keys) keys[k] = false; });
 let yaw = 0.5, pitch = 0.32, locked = false, dragging = false, lastLook = 0;
 document.addEventListener('pointerlockchange', () => { locked = document.pointerLockElement === canvas; });
+let lastTouch = -9999;
+const fromTouch = () => performance.now() - lastTouch < 800;
 canvas.addEventListener('mousedown', e => {
+  if (fromTouch()) return;
   canvas.focus();
   if (locked){ if (e.button === 0) once['Space'] = true; } else dragging = true;
 });
 addEventListener('mouseup', () => dragging = false);
 addEventListener('mousemove', e => {
+  if (fromTouch()) return;
   if (locked || dragging){
     yaw -= (e.movementX||0) * 0.0026; pitch = clamp(pitch + (e.movementY||0) * 0.0026, -0.2, 1.3); lastLook = performance.now();
   }
 });
 canvas.addEventListener('wheel', e => { zoom = clamp(zoom + Math.sign(e.deltaY)*0.12, 0.6, 2.2); e.preventDefault(); }, {passive:false});
 let zoom = 1;
+
+// ---- touch controls: floating stick on the left, drag-to-look on the right, action buttons
+const joy = {x:0, y:0, mag:0};
+{
+  canvas.style.touchAction = 'none';
+  const zone = $('joyzone'), base = $('joybase'), knob = $('joyknob');
+  const RAD = 52; let jid = null, ox = 0, oy = 0;
+  const setKnob = (dx, dy) => { knob.style.transform = `translate(${dx}px,${dy}px)`; };
+  const jmove = e => {
+    let dx = e.clientX - ox, dy = e.clientY - oy; const d = Math.hypot(dx, dy);
+    if (d > RAD){ dx = dx/d*RAD; dy = dy/d*RAD; }
+    setKnob(dx, dy);
+    let x = dx/RAD, y = dy/RAD; const m = Math.hypot(x, y);
+    if (m < 0.12){ x = y = 0; }
+    joy.x = x; joy.y = y; joy.mag = m;
+  };
+  zone.addEventListener('pointerdown', e => {
+    if (jid !== null) return;
+    jid = e.pointerId; lastTouch = performance.now(); zone.setPointerCapture(jid);
+    ox = e.clientX; oy = e.clientY;
+    base.style.left = ox + 'px'; base.style.top = oy + 'px'; base.style.display = 'block';
+    jmove(e); e.preventDefault();
+  });
+  zone.addEventListener('pointermove', e => { if (e.pointerId === jid) jmove(e); });
+  const jend = e => {
+    if (e.pointerId !== jid) return;
+    jid = null; base.style.display = 'none'; setKnob(0,0); joy.x = joy.y = joy.mag = 0;
+  };
+  zone.addEventListener('pointerup', jend); zone.addEventListener('pointercancel', jend);
+
+  let lid = null, lx = 0, ly = 0;
+  canvas.addEventListener('pointerdown', e => {
+    if (e.pointerType === 'mouse' || lid !== null) return;
+    lid = e.pointerId; lx = e.clientX; ly = e.clientY; lastTouch = performance.now();
+    canvas.setPointerCapture(lid);
+  });
+  canvas.addEventListener('pointermove', e => {
+    if (e.pointerId !== lid) return;
+    yaw -= (e.clientX - lx) * 0.0058; pitch = clamp(pitch + (e.clientY - ly) * 0.0046, -0.2, 1.3);
+    lx = e.clientX; ly = e.clientY; lastLook = performance.now(); lastTouch = performance.now();
+  });
+  const lend = e => { if (e.pointerId === lid) lid = null; };
+  canvas.addEventListener('pointerup', lend); canvas.addEventListener('pointercancel', lend);
+
+  const press = (el, down, up) => {
+    el.addEventListener('pointerdown', e => { lastTouch = performance.now(); el.classList.add('down'); el.setPointerCapture(e.pointerId); down && down(); e.preventDefault(); });
+    const end = () => { el.classList.remove('down'); up && up(); };
+    el.addEventListener('pointerup', end); el.addEventListener('pointercancel', end);
+  };
+  press($('btnAct'), () => { if (player.car) keys.Space = true; else once.Space = true; }, () => { keys.Space = false; });
+  press($('btnWave'), () => { once.KeyH = true; });
+  press($('btnCar'),  () => { once.KeyF = true; });
+  document.addEventListener('contextmenu', e => { if (TOUCH) e.preventDefault(); });
+}
 
 // ---------------------------------------------------------------- player & peds
 const player = {x:11, z:-8, y:CURB, v:0, h:PI, car:null, punchT:-1, busy:false, root:null, mixer:null, act:{}, cur:null};
@@ -440,7 +524,7 @@ function initWorldPeople(gltf){
   const shirtCols = [0xd94f4f,0xe6b422,0x3fae6a,0x8b5fd1,0xe8e8e8,0x2b2e35,0xe5773a,0x39a6c9];
   const skinCols = [0xf0c9a4,0xd7a47c,0xa8744f,0x7a4f35,0xe8b999];
   const pantCols = [0x22262e,0x3a4a66,0x5b4a38,0x6b6f78,0x2d3b2d];
-  for (let i=0;i<44;i++){
+  for (let i=0;i<(TOUCH ? 28 : 44);i++){
     const clone = THREE.SkeletonUtils.clone(gltf.scene);
     clone.traverse(o => {
       if (!o.isMesh) return;
@@ -573,11 +657,11 @@ function exitCar(){
 function updatePlayerFoot(dt){
   const f = new THREE.Vector2(-Math.sin(yaw), -Math.cos(yaw)), r = new THREE.Vector2(-f.y, f.x);
   let mx = 0, mz = 0;
-  const fw = (keys.KeyW||keys.ArrowUp?1:0) - (keys.KeyS||keys.ArrowDown?1:0);
-  const rt = (keys.KeyD||keys.ArrowRight?1:0) - (keys.KeyA||keys.ArrowLeft?1:0);
+  const fw = (keys.KeyW||keys.ArrowUp?1:0) - (keys.KeyS||keys.ArrowDown?1:0) - joy.y;
+  const rt = (keys.KeyD||keys.ArrowRight?1:0) - (keys.KeyA||keys.ArrowLeft?1:0) + joy.x;
   mx = f.x*fw + r.x*rt; mz = f.y*fw + r.y*rt;
   const len = Math.hypot(mx, mz);
-  const running = keys.ShiftLeft || keys.ShiftRight;
+  const running = keys.ShiftLeft || keys.ShiftRight || joy.mag > 0.88;
   let target = len > 0.1 ? (running ? 6.2 : 2.1) : 0;
   if (player.busy && player.cur === player.act.Punch) target *= 0.15;
   player.v += (target - player.v) * Math.min(1, dt*10);
@@ -616,8 +700,8 @@ function updatePlayerFoot(dt){
 
 function updatePlayerCar(dt){
   const car = player.car;
-  const gas = (keys.KeyW||keys.ArrowUp?1:0), brake = (keys.KeyS||keys.ArrowDown?1:0);
-  const steer = (keys.KeyA||keys.ArrowLeft?1:0) - (keys.KeyD||keys.ArrowRight?1:0);
+  const gas = (keys.KeyW||keys.ArrowUp||joy.y < -0.25 ? 1 : 0), brake = (keys.KeyS||keys.ArrowDown||joy.y > 0.25 ? 1 : 0);
+  const steer = clamp((keys.KeyA||keys.ArrowLeft?1:0) - (keys.KeyD||keys.ArrowRight?1:0) - joy.x*1.2, -1, 1);
   if (gas) car.v += (car.v < 0 ? 40 : 15) * dt;
   if (brake) car.v -= (car.v > 0 ? 34 : 9) * dt;
   if (!gas && !brake) car.v -= Math.sign(car.v) * Math.min(Math.abs(car.v), 5*dt);
@@ -701,6 +785,13 @@ function frame(){
     }
     speedEl.style.display = player.car ? 'block' : 'none';
     if (player.car){ prompt.style.display = 'none'; kmh.textContent = Math.round(Math.abs(player.car.v)*3.6); }
+    if (TOUCH){
+      const nearC = !player.car && nearestCar();
+      $('btnCar').style.display = (player.car || nearC) ? 'flex' : 'none';
+      $('btnCar').textContent = player.car ? 'Exit' : 'Drive';
+      $('btnWave').style.display = player.car ? 'none' : 'flex';
+      $('btnAct').textContent = player.car ? 'Brake' : 'Punch';
+    }
     updateCars(dt); updatePeds(dt); updateSky(dt); updateCamera(dt); drawMap();
     for (const k in once) once[k] = false;
   }
@@ -719,6 +810,7 @@ loadModel(gltf => {
 $('start').addEventListener('click', () => {
   if (!ready) return;
   $('start').style.display = 'none'; started = true; canvas.focus(); clock.getDelta();
-  try { const p = canvas.requestPointerLock(); if (p && p.catch) p.catch(()=>{}); } catch(e){}
+  document.body.classList.add('started');
+  if (!TOUCH) try { const p = canvas.requestPointerLock(); if (p && p.catch) p.catch(()=>{}); } catch(e){}
 });
 </script>
