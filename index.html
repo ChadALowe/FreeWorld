@@ -825,7 +825,8 @@ const WEAPONS = [
   {id:'bat',     name:'Baseball bat', kind:'melee', rate:0.75, range:2.6, model:'W_Bat',     hold:'1H'},
   {id:'pistol',  name:'Pistol',       kind:'gun',   rate:0.26, dmg:10, pellets:1, spread:0.004, auto:false, model:'W_Pistol',  hold:'1H'},
   {id:'smg',     name:'SMG',          kind:'gun',   rate:0.075,dmg:6,  pellets:1, spread:0.022, auto:true,  model:'W_SMG',     hold:'2H'},
-  {id:'shotgun', name:'Shotgun',      kind:'gun',   rate:0.85, dmg:9,  pellets:8, spread:0.065, auto:false, model:'W_Shotgun', hold:'2H'}
+  {id:'shotgun', name:'Shotgun',      kind:'gun',   rate:0.85, dmg:9,  pellets:8, spread:0.065, auto:false, model:'W_Shotgun', hold:'2H'},
+  {id:'grenade', name:'Grenade',      kind:'throw', rate:0.7,  hold:'1H'}
 ];
 const wmods = {};
 let handBone = null, shake = 0, shoulder = 0, lastHud = '';
@@ -884,7 +885,8 @@ let ikBones = null, recoil = 0;
 const STANCE = {   // right-wrist position relative to the body: [right, up, forward], plus the low-ready pitch
   pistol:  {aim:[0.06, 1.42, 0.46], carry:[0.26, 1.14, 0.20], carryPitch:-0.55},   // low ready, out to the right so it reads from behind
   smg:     {aim:[0.07, 1.36, 0.30], carry:[0.24, 1.18, 0.18], carryPitch:-0.40},
-  shotgun: {aim:[0.04, 1.38, 0.22], carry:[0.24, 1.18, 0.16], carryPitch:-0.40}
+  shotgun: {aim:[0.04, 1.38, 0.22], carry:[0.24, 1.18, 0.16], carryPitch:-0.40},
+  grenade: {aim:[0.08, 1.40, 0.36], carry:[0.30, 1.12, 0.14], carryPitch:-0.30}
 };
 const _pS = new THREE.Vector3(), _pE = new THREE.Vector3(), _pW = new THREE.Vector3(), _T = new THREE.Vector3(),
       _pole = new THREE.Vector3(), _dir = new THREE.Vector3(), _pc = new THREE.Vector3(), _el = new THREE.Vector3(),
@@ -963,7 +965,7 @@ function holdWeapon(ent, B, w, stance, aimK, aimDir, dt){
 const RELOAD_POSE = {carry:[0.42, 0.92, 0.14], carryPitch:-1.2};   // out to the right side so the third-person camera can see it
 function solveArms(dt){
   const wp = WEAPONS[player.weapon];
-  let gun = (wp.kind === 'gun' && STANCE[wp.id]) || null;
+  let gun = ((wp.kind === 'gun' || wp.kind === 'throw') && STANCE[wp.id]) || null;
   const spec = AMMO[wp.id];
   const ph = (gun && player.reloadT > 0 && spec) ? clamp(1 - player.reloadT / spec.time, 0, 1) : 0;
   const rl = ph > 0 ? Math.sin(Math.PI * ph) : 0;                            // gun drops and comes back up
@@ -988,6 +990,7 @@ function attachWeapons(){
   setupIK();
   if (!handBone) { console.warn('hand bone not found'); return; }
   for (const w of WEAPONS){
+    if (w.kind === 'throw'){ const gm = makeGrenadeMesh(); gm.position.set(0, 0.07, 0); gm.visible = false; handBone.add(gm); w.obj = gm; w.muzzle = gm; w.grip = null; continue; }
     if (!w.model || !wmods[w.model]) continue;
     const m = wmods[w.model].clone(true);
     m.rotation.set(-PI/2 + (w.mountRx||0), 0, w.mountRz||0);
@@ -1045,6 +1048,7 @@ function sfx(kind, V){
   else if (kind === 'reload'){ noise('bandpass', 2400, 0.06, 0.45, 4); }
   else if (kind === 'click'){ noise('highpass', 5000, 0.025, 0.6); }
   else if (kind === 'boom'){ noise('lowpass', 900, 0.7, 0.9); thump(90, 30, 0.5, 0.9); }
+  else if (kind === 'throw'){ noise('bandpass', 1400, 0.14, 0.3, 1.2); }
 }
 
 // ---- effects: tracers, sparks, smoke
@@ -1079,6 +1083,43 @@ function spark(x, y, z, n){
     s.life = 0.28; s.o.visible = true; s.o.scale.setScalar(1);
   }
 }
+// grenades: a pool of thrown lumps. Each bounces and blows up at the end of its fuse.
+const grenades = [];
+{ const gg = new THREE.IcosahedronGeometry(0.13, 0), gm = new THREE.MeshBasicMaterial({color:0x4b5a3c});
+  for (let i=0;i<4;i++){ const m = new THREE.Mesh(gg, gm); m.visible = false; scene.add(m); grenades.push({o:m, life:0, vx:0, vy:0, vz:0}); } }
+function makeGrenadeMesh(){ return new THREE.Mesh(new THREE.IcosahedronGeometry(0.13, 0), new THREE.MeshBasicMaterial({color:0x4b5a3c})); }
+function throwGrenade(w){
+  const A = ammoOf(w); if (A) A.mag = Math.max(0, A.mag - 1);
+  const g = grenades.find(g => g.life <= 0); if (!g) return;
+  const base = camera.getWorldDirection(new THREE.Vector3());
+  g.o.position.set(player.x + base.x*0.5, CURB + 1.5, player.z + base.z*0.5); g.o.visible = true;
+  const v = 13; g.vx = base.x*v; g.vy = base.y*v + 4; g.vz = base.z*v; g.life = 2.2;
+  sfx('throw'); player.aimT = 0.5;
+}
+function updateGrenades(dt){
+  for (const g of grenades){
+    if (g.life <= 0) continue;
+    g.life -= dt; g.vy -= 18*dt;
+    g.o.position.x += g.vx*dt; g.o.position.y += g.vy*dt; g.o.position.z += g.vz*dt;
+    const gy = groundH(g.o.position.x, g.o.position.z) + 0.13;
+    if (g.o.position.y < gy){ g.o.position.y = gy; g.vy = -g.vy*0.4; g.vx *= 0.6; g.vz *= 0.6; }
+    g.o.rotation.x += dt*10;
+    if (g.life <= 0){ g.o.visible = false; grenadeBlast(g.o.position.x, g.o.position.z); }
+  }
+}
+function grenadeBlast(x, z){
+  const R = 6.5;
+  explodeAt(x, z, 1.6);
+  for (const p of peds){ if (p.state !== 'down' && Math.hypot(p.x-x, p.z-z) < R) knock(p, 8); }
+  for (const g of GANGS) if (g.members) for (const m of g.members){
+    if (!m.alive) continue; const d = Math.hypot(m.x-x, m.z-z);
+    if (d < R) damageMember(m, Math.round(90*(1-d/R) + 20), false);
+  }
+  for (const c of cars){ if (c.mode === 'player') continue; const d = Math.hypot(c.x-x, c.z-z); if (d < R) hurtCar(c, Math.round(90*(1-d/R) + 30)); }
+  const dp = Math.hypot(player.x-x, player.z-z);
+  if (dp < 3 && !player.car) hurtPlayer(Math.round(40*(1-dp/3)) + 10);
+  gangAlert(x, z, R + 4); panic(x, z, R + 4); shake = Math.min(0.2, shake + 0.15);
+}
 // car explosion: three fireball lumps, a handful of bouncing debris boxes, one boom. Pools are fixed-size (phone friendly).
 const booms = [], debris = [];
 {
@@ -1087,11 +1128,12 @@ const booms = [], debris = [];
   const dg = new THREE.BoxGeometry(1,1,1), dcol = [0x222226, 0x3a3a40, 0xc0392b, 0xdcdcdc];
   for (let i=0;i<24;i++){ const m = new THREE.Mesh(dg, new THREE.MeshBasicMaterial({color:dcol[i%4]})); m.visible = false; scene.add(m); debris.push({o:m, life:0, vx:0, vy:0, vz:0, s:0.3}); }
 }
-function explodeCar(car){
-  const x = car.x, z = car.z, gy = groundH(x, z);
+function explodeCar(car){ explodeAt(car.x, car.z, 1); }
+function explodeAt(x, z, big){
+  const gy = groundH(x, z);
   booms.forEach((b, i) => {
-    b.life = b.max = 0.45 + i*0.12;
-    b.o.position.set(x + (Math.random()-.5)*0.5, gy + 1.0 + i*0.3, z + (Math.random()-.5)*0.5);
+    b.life = b.max = 0.45 + i*0.12; b.big = big;
+    b.o.position.set(x + (Math.random()-.5)*0.5, gy + 1.0*big + i*0.3, z + (Math.random()-.5)*0.5);
     b.o.scale.setScalar(0.4); b.o.visible = true;
   });
   let n = 0;
@@ -1108,7 +1150,7 @@ function updateBooms(dt){
   for (const b of booms){
     if (b.life <= 0) continue;
     b.life -= dt; const t = 1 - Math.max(0, b.life)/b.max;
-    b.o.scale.setScalar(0.4 + t*2.2);
+    b.o.scale.setScalar((0.4 + t*2.2) * (b.big || 1));
     b.o.material.opacity = Math.max(0, b.life/b.max) * 0.95;
     if (b.life <= 0) b.o.visible = false;
   }
@@ -1126,6 +1168,7 @@ function updateBooms(dt){
 }
 function updateEffects(dt){
   updateBooms(dt);
+  updateGrenades(dt);
   for (const t of tracers){ if (t.life > 0){ t.life -= dt; t.o.material.opacity = Math.max(0, t.life/0.07); if (t.life <= 0) t.o.visible = false; } }
   for (const s of sparks){
     if (s.life <= 0) continue;
@@ -1285,6 +1328,7 @@ function updateActions(dt){
   if (trig && (!A || (A.mag > 0 && player.reloadT <= 0)) && player.cool <= 0 && !player.oneShot && !player.swing && !player.shop){
     player.cool = w.rate;
     if (w.kind === 'gun') fireGun(w);
+    else if (w.kind === 'throw') throwGrenade(w);
     else if (w.id === 'bat'){ player.swing = true; player.act.Swing.reset().play(); player.act.Swing.timeScale = 1.45; player.hitT = 0.3; sfx('swing'); }
     else { player.oneShot = 'Punch'; player.act.Punch.reset().play(); player.act.Punch.timeScale = 1.7; player.hitT = 0.34; sfx('swing'); }
   }
@@ -1294,7 +1338,7 @@ function updateActions(dt){
   if (hud !== lastHud){
     lastHud = hud;
     $('weapon').textContent = A ? w.name + '   ' + ammoTxt : w.name;
-    $('xhair').style.display = (w.kind === 'gun' && !player.car) ? 'block' : 'none';
+    $('xhair').style.display = ((w.kind === 'gun' || w.kind === 'throw') && !player.car) ? 'block' : 'none';
   }
 }
 
@@ -1852,7 +1896,7 @@ function updateVitals(dt){
 // away from the city; going in and out is a fade to black and a teleport.
 const owned = {fists:true};
 // ammo: a magazine plus a reserve for each gun. Buying a gun gives one full magazine and one box in reserve.
-const AMMO = {pistol:{mag:12, box:24, price:40, time:1.1}, smg:{mag:30, box:60, price:70, time:1.7}, shotgun:{mag:6, box:12, price:90, time:2.2}};
+const AMMO = {pistol:{mag:12, box:24, price:40, time:1.1}, smg:{mag:30, box:60, price:70, time:1.7}, shotgun:{mag:6, box:12, price:90, time:2.2}, grenade:{mag:1, box:5, price:40, time:0.5}};
 const ammo = {};
 function ammoOf(w){ return (w && AMMO[w.id] && ammo[w.id]) || null; }
 function initAmmo(id){ if (AMMO[id]) ammo[id] = {mag: AMMO[id].mag, res: AMMO[id].box}; }
@@ -1870,7 +1914,8 @@ const SHOP_ITEMS = [
   {id:'bat',     name:'Baseball Bat', price:60,  dmg:4, rate:3, range:1, blurb:'Old school. Swing it at anything that moves.'},
   {id:'pistol',  name:'Pistol',       price:250, dmg:2, rate:3, range:3, blurb:'Reliable sidearm. Accurate and easy to carry.'},
   {id:'smg',     name:'SMG',          price:700, dmg:2, rate:5, range:3, blurb:'Hold the trigger and walk it in. Eats rounds.'},
-  {id:'shotgun', name:'Shotgun',      price:900, dmg:5, rate:1, range:2, blurb:'Devastating up close. Let them come to you.'}
+  {id:'shotgun', name:'Shotgun',      price:900, dmg:5, rate:1, range:2, blurb:'Devastating up close. Let them come to you.'},
+  {id:'grenade', name:'Grenades',     price:150, dmg:5, rate:1, range:3, blurb:'Pull the pin, lob it, and get clear. Big bang, short fuse.'}
 ];
 const shop = {built:false, ix:1500, iz:1500, doorX:0, doorZ:0, state:'idle', fade:0, fadeDir:0, after:null, talk:false, sel:0, cool:0, frozen:false,
               nearCounter:false, camX:0, items:[], skipKeys:false, keeper:null, arrow:null, ring:null, arrow2:null, ring2:null, plate:null, lineT:0};
@@ -1947,8 +1992,8 @@ function buildShop(gltf){
   shop.plate = new THREE.Mesh(new THREE.PlaneGeometry(1.72, 1.55), new THREE.MeshBasicMaterial({color:0xffd23a, transparent:true, opacity:0.22, depthWrite:false}));
   shop.plate.position.set(IX, 1.8, IZ - 5.8); scene.add(shop.plate);
   shop.items = SHOP_ITEMS.map((it, i) => {
-    const def = WEAPONS.find(q => q.id === it.id), x = (i - 1.5) * 1.8 - 0.6;
-    const o = wmods[def.model].clone(true); o.scale.setScalar(2.1); o.rotation.set(0, PI/2, 0);
+    const def = WEAPONS.find(q => q.id === it.id), x = (i - (SHOP_ITEMS.length - 1) / 2) * 1.6 - 0.6;
+    const o = (def.model && wmods[def.model]) ? wmods[def.model].clone(true) : makeGrenadeMesh(); o.scale.setScalar(2.1); o.rotation.set(0, PI/2, 0);
     const holder = new THREE.Group(); holder.add(o); scene.add(holder); holder.updateMatrixWorld(true);
     const c = new THREE.Box3().setFromObject(o).getCenter(new THREE.Vector3()); o.position.sub(c);
     holder.position.set(IX + x, 1.9, IZ - 5.74);
