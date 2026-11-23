@@ -18,6 +18,9 @@ Touch devices get an on-screen stick (left thumb), drag-to-look (right side) and
 Every weapon is held with both hands: the right hand holds it, and the left hand is placed on a grip point stored in each weapon model (`Grip2_*`) using two-bone IK. The weapon points where the camera aims.
 Bullets are traced from the crosshair. Shot pedestrians fall and nearby ones run; cars take damage and are wrecked (they smoke) after enough hits. Infinite ammo.
 
+## Money and the gun shop
+You start with fists and $500, and the cash shows top-right in the GTA IV style (with the change underneath). No weapons are owned at the start: walk into the yellow arrow over the door of the GUNS & AMMO shop (yellow marker on the minimap, a short walk from the start), the screen fades into the shop, walk up to the counter and press F (or tap Talk) to talk to the shopkeeper. Browse the weapon board with the arrow keys (or the on-screen arrows) and press Enter / Buy. Walk into the yellow arrow by the inside door to leave. Cash, kills and purchased weapons are saved in the browser.
+
 ## Gangs
 Three gang compounds (Crimson Dogs, Verdes, Violet Kings; coloured rings on the minimap and a flag you can see from afar) are held by armed members with pistols, SMGs, shotguns and bats. They spot you, take cover-ish positions, strafe and shoot back, so you have health (it slowly regenerates), a damage flash, and a WASTED screen with respawn at the start. Gunfire alerts the whole gang. Kills pay $100 ($150 for a headshot), clearing a turf pays $500 and the gang returns after a few minutes. Members use the same two-handed weapon IK as the player. Shooting, bats and cars all hurt them.
 
@@ -29,6 +32,7 @@ The park block north-west of the start (orange marker on the minimap, orange bea
 - `lowpoly_human.glb` low-poly human, 20-bone rig; actions: Idle, Walk, Run, Wave, Punch, plus arm-only Carry1H/Aim1H/Carry2H/Aim2H/Swing for weapons
 - `car_c1.glb` Citroen C1 and `car_v60.glb` Volvo V60 (about 500 tris each). Paint is the `Body` material; wheels are two axle meshes (`*_WheelsF`/`*_WheelsR`) that spin on X
 - `weapons.glb` bat, pistol, SMG, shotgun (grip at the origin, barrel along +Z, a `Muzzle_*` node at the tip and a `Grip2_*` node for the off hand)
+
 
 
 
