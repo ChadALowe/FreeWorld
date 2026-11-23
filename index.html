@@ -55,6 +55,9 @@
   #btnCar{width:68px;height:68px;right:calc(max(22px,env(safe-area-inset-right,0px)) + 100px);bottom:calc(max(26px,calc(env(safe-area-inset-bottom,0px) + 14px)) + 128px)}
   #btnAim{width:62px;height:62px;right:calc(max(22px,env(safe-area-inset-right,0px)) + 14px);bottom:calc(max(26px,calc(env(safe-area-inset-bottom,0px) + 14px)) + 100px)}
   .tbtn.on{background:rgba(255,209,102,.75);color:#15181d}
+  #btnHand{width:66px;height:66px;font-size:11px;right:calc(max(22px,env(safe-area-inset-right,0px)) + 12px);bottom:calc(max(26px,calc(env(safe-area-inset-bottom,0px) + 14px)) + 100px);background:rgba(150,40,40,.6)}
+  #btnHand.down{background:rgba(255,90,74,.85);color:#fff}
+  #hb{margin-left:12px;font-size:12px;font-weight:700;letter-spacing:.1em;color:#ff5a4a;opacity:.25}
   #fsBtn{position:fixed;z-index:6;left:max(12px,env(safe-area-inset-left,0px));top:max(12px,env(safe-area-inset-top,0px));width:42px;height:42px;border-radius:10px;border:1px solid rgba(255,255,255,.35);background:rgba(20,24,32,.55);color:#fff;font-size:20px;line-height:1;display:none;align-items:center;justify-content:center;padding:0;touch-action:none}
   body.touch.started #fsBtn.can{display:flex}
   body.touch #range{top:calc(max(12px,env(safe-area-inset-top,0px)) + 52px)}
@@ -83,7 +86,7 @@
 <div id="clock" class="hud"></div>
 <div id="range" class="hud"><b>TEST RANGE</b><div id="rangeStats"></div><div id="rangeReset">Reset range (T)</div></div>
 <div id="hint" class="hud">Test range: head for the orange marker on the minimap, or the orange beam in the sky</div>
-<div id="speed" class="hud"><span id="kmh">0</span><small>km/h</small></div>
+<div id="speed" class="hud"><span id="kmh">0</span><small>km/h</small><small id="hb">HANDBRAKE</small></div>
 <div id="prompt" class="hud"><b>F</b> to drive</div>
 <div id="joyzone" class="tc"></div>
 <div id="joybase" class="tc"><div id="joyknob"></div></div>
@@ -91,6 +94,7 @@
 <div id="btnWave" class="tbtn tc">Wave</div>
 <div id="btnWeapon" class="tbtn tc">Fists</div>
 <div id="btnAim" class="tbtn tc" style="display:none">Aim</div>
+<div id="btnHand" class="tbtn tc" style="display:none">Hand<br>brake</div>
 <button id="fsBtn" aria-label="Toggle fullscreen">&#x26F6;</button>
 <div id="xhair" class="hud"></div>
 <div id="weapon" class="hud">Fists</div>
@@ -351,9 +355,9 @@ const cars = [];
 let startCar = null;
 const headMats = [], tailMats = [];
 const CAR_TYPES = {
-  c1:  {key:'c1',  b64: C1_B64,  off:0.75, r:0.85, half:1.74, front:1.6, wr:0.29,
+  c1:  {key:'c1',  b64: C1_B64,  off:0.75, rearOff:1.2, track:0.68, r:0.85, half:1.74, front:1.6, wr:0.29,
         colors:[0xf2c230,0xe8e8e8,0xd23b3b,0x2f6fe0,0x2fa66a,0xe07b2f,0xd94fa0,0x8bc34a]},
-  v60: {key:'v60', b64: V60_B64, off:1.45, r:0.98, half:2.38, front:2.2, wr:0.335,
+  v60: {key:'v60', b64: V60_B64, off:1.45, rearOff:1.4, track:0.77, r:0.98, half:2.38, front:2.2, wr:0.335,
         colors:[0x1b1d22,0xc4c7cc,0xe8e8e8,0x1f3a6b,0x7a1f26,0x4a5560]}
 };
 function b64ToBuf(b64){
@@ -559,6 +563,7 @@ let touchGas = false, touchBrake = false;
   press($('btnAct'), () => { if (player.car) touchGas = true; else { keys.Fire = true; once.Fire = true; } }, () => { touchGas = false; keys.Fire = false; });
   press($('btnWeapon'), () => { once.KeyR = true; });
   press($('btnAim'), () => { touchAim = !touchAim; $('btnAim').classList.toggle('on', touchAim); });
+  press($('btnHand'), () => { touchHB = true; }, () => { touchHB = false; });
   {  // slide the thumb while holding Fire to keep aiming (same sensitivity as the look zone)
     const fb = $('btnAct'); let pid = null, px = 0, py = 0;
     fb.addEventListener('pointerdown', e => { pid = e.pointerId; px = e.clientX; py = e.clientY; });
@@ -832,6 +837,7 @@ function initAudio(){
     noiseBuf = actx.createBuffer(1, actx.sampleRate, actx.sampleRate);
     const d = noiseBuf.getChannelData(0); for (let i=0;i<d.length;i++) d[i] = Math.random()*2-1;
     if (actx.state === 'suspended') actx.resume();
+    startScreech();
   } catch(e){ actx = null; }
 }
 function sfx(kind){
@@ -1393,7 +1399,7 @@ function exitCar(){
   const car = player.car, fx = Math.sin(car.h), fz = Math.cos(car.h);
   player.x = car.x + fz*2.3; player.z = car.z - fx*2.3;       // left door
   const p = {x:player.x, z:player.z}; pushOut(p, 0.4); player.x = p.x; player.z = p.z;
-  player.h = car.h; player.v = 0; car.mode = 'parked'; player.car = null; player.root.visible = true;
+  player.h = car.h; player.v = 0; car.mode = 'parked'; car.vx = car.vz = undefined; driftSlip = 0; player.car = null; player.root.visible = true;
 }
 
 function updatePlayerFoot(dt){
@@ -1428,36 +1434,97 @@ function updatePlayerFoot(dt){
   player.root.rotation.y = player.h;
 }
 
+// ---- driving: the car keeps a world velocity, so it has real sideways grip. The handbrake locks the rear
+//      tyres (almost no sideways grip, friction braking, extra yaw) so the back end slides out into a drift.
+let touchHB = false, driftSlip = 0, screech = null, skidI = 0, skidDist = 0, smokeT = 0;
+const skids = [], tsmoke = [];
+{
+  const sm = new THREE.MeshBasicMaterial({color:0x101010, transparent:true, opacity:0.5, depthWrite:false, polygonOffset:true, polygonOffsetFactor:-3});
+  const sg = new THREE.PlaneGeometry(0.24, 0.7);
+  for (let i=0;i<260;i++){ const m = new THREE.Mesh(sg, sm); m.rotation.order = 'YXZ'; m.rotation.x = -PI/2; m.visible = false; scene.add(m); skids.push(m); }
+  const tg = new THREE.BoxGeometry(0.4, 0.4, 0.4);
+  for (let i=0;i<40;i++){ const m = new THREE.Mesh(tg, new THREE.MeshBasicMaterial({color:0xe6e6e6, transparent:true, opacity:0.4, depthWrite:false})); m.visible = false; scene.add(m); tsmoke.push({o:m, life:0}); }
+}
+function startScreech(){
+  try {
+    const s = actx.createBufferSource(); s.buffer = noiseBuf; s.loop = true;
+    const f = actx.createBiquadFilter(); f.type = 'bandpass'; f.frequency.value = 1700; f.Q.value = 6;
+    const g = actx.createGain(); g.gain.value = 0;
+    s.connect(f); f.connect(g); g.connect(actx.destination); s.start(); screech = {g};
+  } catch(e){ screech = null; }
+}
+function emitDrift(car, vx, vz, slip, dt, sp){
+  const fx = Math.sin(car.h), fz = Math.cos(car.h), rx = -fz, rz = fx, off = car.type.rearOff, tr = car.type.track;
+  skidDist += sp*dt;
+  if (skidDist > 0.35){
+    skidDist = 0;
+    const yawv = Math.atan2(vx, vz);            // marks follow the direction of travel, not where the nose points
+    for (const s of [-1, 1]){
+      const m = skids[skidI++ % skids.length], x = car.x - fx*off + rx*tr*s, z = car.z - fz*off + rz*tr*s;
+      m.position.set(x, groundH(x, z) + 0.018, z); m.rotation.y = yawv; m.visible = true;
+    }
+  }
+  smokeT -= dt;
+  if (smokeT <= 0 && slip > 0.3){
+    smokeT = 0.07;
+    for (const s of [-1, 1]){
+      const p = tsmoke.find(p => p.life <= 0); if (!p) break;
+      p.life = 0.9; p.o.position.set(car.x - fx*off + rx*tr*s, groundH(car.x, car.z) + 0.25, car.z - fz*off + rz*tr*s); p.o.visible = true;
+    }
+  }
+}
+function updateDriftFx(dt){
+  for (const p of tsmoke){
+    if (p.life <= 0) continue;
+    p.life -= dt; p.o.position.y += 0.9*dt; p.o.scale.setScalar(1 + (0.9 - p.life)*2.2); p.o.material.opacity = Math.max(0, p.life/0.9) * 0.4;
+    if (p.life <= 0) p.o.visible = false;
+  }
+  if (screech) screech.g.gain.setTargetAtTime((player.car ? driftSlip : 0) * 0.13, actx.currentTime, 0.06);
+  if (!player.car) driftSlip = 0;
+}
+
 function updatePlayerCar(dt){
   const car = player.car;
   const gas = (keys.KeyW||keys.ArrowUp||touchGas ? 1 : 0), brake = (keys.KeyS||keys.ArrowDown||touchBrake ? 1 : 0);
+  const hb = !!(keys.Space || touchHB);
   const steer = clamp((keys.KeyA||keys.ArrowLeft?1:0) - (keys.KeyD||keys.ArrowRight?1:0) - joy.x*1.2, -1, 1);
-  if (gas) car.v += (car.v < 0 ? 40 : 15) * dt;
-  if (brake) car.v -= (car.v > 0 ? 34 : 9) * dt;
-  if (!gas && !brake) car.v -= Math.sign(car.v) * Math.min(Math.abs(car.v), 5*dt);
-  if (keys.Space) car.v -= Math.sign(car.v) * Math.min(Math.abs(car.v), 30*dt);
-  car.v = clamp(car.v, -9, 34);
-  const rate = 1.9 * (1 - Math.min(Math.abs(car.v)/50, 0.45));
-  car.h += steer * rate * dt * clamp(car.v/4, -1, 1);
-  const fx = Math.sin(car.h), fz = Math.cos(car.h);
-  car.x += fx*car.v*dt; car.z += fz*car.v*dt;
+  if (car.vx === undefined){ car.vx = Math.sin(car.h)*car.v; car.vz = Math.cos(car.h)*car.v; }
+  const fx = Math.sin(car.h), fz = Math.cos(car.h), rx = -fz, rz = fx;      // forward and right
+  let vf = car.vx*fx + car.vz*fz, vl = car.vx*rx + car.vz*rz;               // speed along the nose and sideways
+  if (gas) vf += (vf < 0 ? 40 : 15) * dt;
+  if (brake) vf -= (vf > 0 ? 34 : 9) * dt;
+  if (!gas && !brake) vf -= Math.sign(vf) * Math.min(Math.abs(vf), 5*dt);
+  vf = clamp(vf, -9, 34);
+  vl *= Math.exp(-(hb ? 0.9 : (Math.abs(vl) > 6 ? 5 : 9)) * dt);            // tyre grip: strong normally, almost gone on the handbrake
+  if (hb) vf -= Math.sign(vf) * Math.min(Math.abs(vf), 7*dt);                // locked rear wheels drag the car down
+  const sp = Math.hypot(vf, vl);
+  const yawF = hb ? Math.min(1, sp/4) * (vf >= -0.5 ? 1 : -1) : clamp(vf/4, -1, 1);
+  car.vx = fx*vf + rx*vl; car.vz = fz*vf + rz*vl;
+  car.h += steer * 1.9 * (1 - Math.min(sp/50, 0.45)) * (hb ? 1.6 : 1) * dt * yawF;   // the handbrake swings the tail round harder
+  car.x += car.vx*dt; car.z += car.vz*dt;
   let hit = false;
-  const pts = carPoints(car);
-  for (const q of pts){
-    const before = {x:q.x, z:q.z};
-    const t = {x:q.x, z:q.z};
+  for (const q of carPoints(car)){
+    const before = {x:q.x, z:q.z}, t = {x:q.x, z:q.z};
     let h = pushOut(t, car.type.r);
-    for (const o of cars){ if (o!==car) h = pushFromPoints(t, 1.0, carPoints(o)) || h; }
+    for (const o of cars){ if (o !== car) h = pushFromPoints(t, 1.0, carPoints(o)) || h; }
     if (h){ car.x += t.x - before.x; car.z += t.z - before.z; hit = true; }
   }
-  if (hit) car.v *= 1 - Math.min(1, dt*5);
+  if (hit){ const k = 1 - Math.min(1, dt*5); car.vx *= k; car.vz *= k; }
   car.x = clamp(car.x, -HALF-30, HALF+30); car.z = clamp(car.z, -HALF-30, HALF+30);
+  const hx = Math.sin(car.h), hz = Math.cos(car.h);
+  car.v = car.vx*hx + car.vz*hz;                                              // forward speed for the rest of the game
+  // skid marks, tyre smoke and screech while sliding
+  let slip = clamp((Math.abs(vl) - 1.8) / 5, 0, 1);
+  if (hb && sp > 3) slip = Math.max(slip, 0.7);
+  driftSlip = sp > 2.5 ? slip : 0;
+  if (driftSlip > 0.12) emitDrift(car, car.vx, car.vz, driftSlip, dt, sp);
+  $('hb').style.opacity = hb ? 1 : 0.25;
   // run people over
   if (Math.abs(car.v) > 4) for (const p of peds){
     if (p.state === 'down') continue;
-    if (Math.hypot(p.x - (car.x + fx*car.type.front*Math.sign(car.v)), p.z - (car.z + fz*car.type.front*Math.sign(car.v))) < 1.7) knock(p);
+    if (Math.hypot(p.x - (car.x + hx*car.type.front*Math.sign(car.v)), p.z - (car.z + hz*car.type.front*Math.sign(car.v))) < 1.7) knock(p);
   }
-  if (Math.abs(car.v) > 3) rangeCar(car, fx, fz);
+  if (Math.abs(car.v) > 3) rangeCar(car, hx, hz);
   player.x = car.x; player.z = car.z;
   if (once.KeyF && Math.abs(car.v) < 9) exitCar();
 }
@@ -1525,7 +1592,7 @@ function frame(){
       solveArms(dt);
     }
     speedEl.style.display = player.car ? 'block' : 'none';
-    if (player.car){ prompt.style.display = 'none'; kmh.textContent = Math.round(Math.abs(player.car.v)*3.6); }
+    if (player.car){ prompt.style.display = 'none'; kmh.textContent = Math.round(Math.hypot(player.car.vx || 0, player.car.vz || 0)*3.6); }
     if (TOUCH){
       const nearC = !player.car && nearestCar();
       $('btnCar').style.display = (player.car || nearC) ? 'flex' : 'none';
@@ -1538,10 +1605,11 @@ function frame(){
       const gunOn = !player.car && wp.kind === 'gun';
       if (!gunOn && touchAim){ touchAim = false; $('btnAim').classList.remove('on'); }
       $('btnAim').style.display = gunOn ? 'flex' : 'none';
+      $('btnHand').style.display = player.car ? 'flex' : 'none';
       $('btnWeapon').textContent = wp.id === 'smg' ? 'SMG' : wp.id.charAt(0).toUpperCase() + wp.id.slice(1);
       document.body.classList.toggle('incar', !!player.car);
     }
-    updateCars(dt); updatePeds(dt); updateEffects(dt); updateRange(dt); updateSky(dt); updateCamera(dt); drawMap();
+    updateCars(dt); updatePeds(dt); updateEffects(dt); updateDriftFx(dt); updateRange(dt); updateSky(dt); updateCamera(dt); drawMap();
     $('xhair').classList.toggle('aim', camAim > 0.5);
     for (const k in once) once[k] = false;
   }
