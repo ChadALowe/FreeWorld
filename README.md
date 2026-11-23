@@ -24,6 +24,9 @@ You start with fists and $500, and the cash shows top-right in the GTA IV style 
 ## Vehicles
 There are 20 vehicles in traffic and parked on the kerb: the C1 and V60 plus 18 more in `assets/cars_roster.glb` (saloon, hatchback, coupe, muscle car, roadster, hot hatch, SUV, pickup, van, minibus, taxi, patrol car, ice cream van, kei truck, 4x4, limousine, classic saloon, GT coupe). Each is built from the same parametric body generator in the Blender file, around 500 triangles.
 
+## Car park
+All 20 vehicles are parked in two rows in the car park far to the east of the city (teal marker on the minimap, named signs above each car). Walk or drive there to test them. Getting into any car briefly shows its name at the top of the screen.
+
 ## Ammo and reloading
 Guns have a magazine and a reserve. Pistol 12 + 24 reserve, SMG 30 + 60, shotgun 6 + 12. Each shot uses a round (a shotgun blast is one round). Press G (or the Reload button on phones) to reload; you cannot fire while reloading, and switching weapons cancels it. An empty gun with no reserve clicks and tells you to buy more. Buy ammo boxes at the gun shop with the Ammo button (or B) for the gun you have selected.
 
@@ -38,6 +41,7 @@ The park block north-west of the start (orange marker on the minimap, orange bea
 - `lowpoly_human.glb` low-poly human, 20-bone rig; actions: Idle, Walk, Run, Wave, Punch, plus arm-only Carry1H/Aim1H/Carry2H/Aim2H/Swing for weapons
 - `car_c1.glb` Citroen C1 and `car_v60.glb` Volvo V60 (about 500 tris each). Paint is the `Body` material; wheels are two axle meshes (`*_WheelsF`/`*_WheelsR`) that spin on X
 - `weapons.glb` bat, pistol, SMG, shotgun (grip at the origin, barrel along +Z, a `Muzzle_*` node at the tip and a `Grip2_*` node for the off hand)
+
 
 
 

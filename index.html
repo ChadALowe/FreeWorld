@@ -67,6 +67,8 @@
   #wasted.show{display:flex}
   #toast{left:50%;top:24%;transform:translateX(-50%);font-size:clamp(18px,3.8vw,32px);font-weight:800;opacity:0;transition:opacity .25s;text-shadow:0 2px 12px #000;white-space:nowrap}
   #toast.show{opacity:1}
+  #carname{left:50%;top:max(12px,env(safe-area-inset-top,0px));transform:translateX(-50%);font-size:clamp(16px,3vw,26px);font-weight:800;letter-spacing:.06em;color:#fff;text-shadow:0 2px 10px #000;background:rgba(10,13,18,.55);padding:4px 14px;border-radius:8px;opacity:0;transition:opacity .4s;white-space:nowrap;pointer-events:none}
+  #carname.show{opacity:1}
   #hint{left:50%;top:calc(max(14px,env(safe-area-inset-top,0px)) + 66px);transform:translateX(-50%);background:rgba(10,13,18,.78);border-left:3px solid #ff8a00;padding:8px 14px;border-radius:8px;font-size:13px;display:none;max-width:70vw;text-align:center}
   #hint.show{display:block}
   #xhair{left:50%;top:50%;width:20px;height:20px;margin:-10px 0 0 -10px;border:2px solid rgba(255,255,255,.9);border-radius:50%;box-shadow:0 0 0 1px rgba(0,0,0,.45);display:none}
@@ -144,6 +146,7 @@
 <div id="vitals" class="hud"><div id="hpbar"><div id="hpfill"></div></div><div id="cashline">$0  ·  Kills 0</div><div id="turf"></div></div>
 <div id="wasted" class="hud">WASTED</div>
 <div id="toast" class="hud"></div>
+<div id="carname" class="hud"></div>
 <div id="range" class="hud"><b>TEST RANGE</b><div id="rangeStats"></div><div id="rangeReset">Reset range (T)</div></div>
 <div id="hint" class="hud">You start with fists and $500. Buy weapons at the gun shop (yellow marker, walk into the arrow). Orange marker: the test range.</div>
 <div id="speed" class="hud"><span id="kmh">0</span><small>km/h</small><small id="hb">HANDBRAKE</small></div>
@@ -486,9 +489,11 @@ const ROSTER = [
   {key:'classic',  L:4.6, W:1.9,  wr:0.34, colors:[0x7a1f26,0x1f3a6b,0xd9a620,0xe8e8e8]},
   {key:'gt',       L:4.5, W:1.9,  wr:0.33, colors:[0xffb300,0x2fa66a,0x1d3f7a,0xd42a2a]}
 ];
+const ROSTER_NAMES = {sedan:'Saloon', hatch:'Hatchback', coupe:'Coupe', muscle:'Muscle car', roadster:'Roadster', hothatch:'Hot hatch', suv:'SUV', pickup:'Pickup', van:'Van', minibus:'Minibus', taxi:'Taxi', patrol:'Patrol car', icecream:'Ice cream van', kei:'Kei truck', offroad:'4x4', limo:'Limousine', classic:'Classic saloon', gt:'GT coupe'};
+CAR_TYPES.c1.name = 'Citroën C1'; CAR_TYPES.v60.name = 'Volvo V60';
 // the same collision numbers the C1 and V60 use, worked out from the size of each car
 for (const r of ROSTER){
-  CAR_TYPES[r.key] = {key:r.key, b64:null, off:r.L*0.3, r:r.W*0.55, half:r.L/2, front:r.L/2-0.3, wr:r.wr, rearOff:r.L*0.27, track:r.W*0.42, colors:r.colors};
+  CAR_TYPES[r.key] = {key:r.key, name:ROSTER_NAMES[r.key], b64:null, off:r.L*0.3, r:r.W*0.55, half:r.L/2, front:r.L/2-0.3, wr:r.wr, rearOff:r.L*0.27, track:r.W*0.42, colors:r.colors};
 }
 const ALL_CAR_TYPES = [CAR_TYPES.c1, CAR_TYPES.v60, ...ROSTER.map(r => CAR_TYPES[r.key])];
 function parseRoster(){
@@ -2083,6 +2088,11 @@ function drawMap(){
     mctx.strokeStyle = '#ffd21a'; mctx.lineWidth = 7; mctx.beginPath(); mctx.arc(dx, dz, 22, 0, PI*2); mctx.stroke();
     mctx.fillStyle = '#ffd21a'; mctx.beginPath(); mctx.arc(dx, dz, 9, 0, PI*2); mctx.fill();
   }
+  {   // teal marker for the car park
+    let dx = (LOT.x-px)*SCALE, dz = (LOT.z-pz)*SCALE; const dd = Math.hypot(dx, dz), lim = 175;
+    if (dd > lim){ dx = dx/dd*lim; dz = dz/dd*lim; }
+    mctx.strokeStyle = '#3ef0d0'; mctx.lineWidth = 7; mctx.beginPath(); mctx.arc(dx, dz, 22, 0, PI*2); mctx.stroke();
+  }
   for (const g of GANGS){      // gang turf rings and live members
     if (!g.members) continue;
     let dx = (g.cx-px)*SCALE, dz = (g.cz-pz)*SCALE; const dd = Math.hypot(dx, dz), lim = 175;
@@ -2106,6 +2116,42 @@ function drawMap(){
 let camDist = 4.6, camTarget = new THREE.Vector3(), camPos = new THREE.Vector3(), ready = false, started = false;
 const prompt = $('prompt'), speedEl = $('speed'), kmh = $('kmh');
 
+// ---- car name, shown briefly when you get in
+function showCarName(name){
+  const el = $('carname'); if (!el || !name) return;
+  el.textContent = name; el.classList.add('show');
+  clearTimeout(showCarName.t); showCarName.t = setTimeout(() => el.classList.remove('show'), 2600);
+}
+
+// ---- the car park: all 20 vehicles in two rows, far east of the city, with names above each one
+const LOT = {x:330, z:0};
+const WORLD = 600;   // how far you can drive or walk (the car park sits outside the city)
+function buildCarPark(){
+  const LX = LOT.x, LZ = LOT.z;
+  const asph = new THREE.Mesh(new THREE.BoxGeometry(76, 0.03, 44), lam(0x2a2d33));
+  asph.position.set(LX, 0.015, LZ); asph.receiveShadow = true; scene.add(asph);
+  const white = lam(0xe8e8e6);
+  const line = (w, d, x, z) => { const m = new THREE.Mesh(new THREE.BoxGeometry(w, 0.02, d), white); m.position.set(x, 0.035, z); m.receiveShadow = true; scene.add(m); };
+  for (const zl of [LZ-10, LZ-3.5, LZ+3.5, LZ+10]) line(31, 0.12, LX-0.5, zl);
+  for (const r of [-1, 1]) for (let i=0;i<=10;i++) line(0.12, 6.5, LX-15+i*3, LZ + r*6.75);
+  // entrance board, facing the way you arrive from (west)
+  const board = new THREE.Mesh(new THREE.PlaneGeometry(12, 1.5), new THREE.MeshBasicMaterial({map: labelTex('CAR PARK  -  TEST EVERY CAR', 1024, 128, '#3ef0d0', '#16181c', 'bold 80px system-ui, sans-serif'), side: THREE.DoubleSide}));
+  board.position.set(LX-19.5, 2.4, LZ); board.rotation.y = -PI/2; scene.add(board);
+  // one car per space, names floating above them
+  for (let row=0; row<2; row++) for (let i=0;i<10;i++){
+    const t = ALL_CAR_TYPES[row*10 + i];
+    const x = LX - 13.5 + i*3, z = LZ + (row === 0 ? -6.75 : 6.75), h = row === 0 ? 0 : PI;
+    const car = addCar(t, x, z, h, 'parked', t.colors[0]);
+    car.lot = true; lotCars.push(car);
+    const cv = document.createElement('canvas'); cv.width = 256; cv.height = 72;
+    const g = cv.getContext('2d'); g.font = 'bold 40px system-ui, sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle';
+    g.lineWidth = 7; g.strokeStyle = '#000'; g.strokeText(t.name, 128, 36); g.fillStyle = '#fff'; g.fillText(t.name, 128, 36);
+    const tex = new THREE.CanvasTexture(cv); tex.encoding = THREE.sRGBEncoding;
+    const sp = new THREE.Sprite(new THREE.SpriteMaterial({map: tex, transparent: true})); sp.scale.set(2.6, 0.73, 1);
+    sp.position.set(x, 2.5, z); scene.add(sp);
+  }
+}
+const lotCars = [];
 function nearestCar(){
   let best = null, bd = 3.8;
   for (const car of cars){
@@ -2117,6 +2163,7 @@ function nearestCar(){
   return best;
 }
 function enterCar(car){
+  showCarName(car.type.name);
   player.car = car; car.mode = 'player'; car.ai = null; car.ignore = 0;
   player.root.visible = false; player.oneShot = null; player.swing = false; player.hitT = -1; keys.Fire = false;
   $('xhair').style.display = 'none'; lastHud = '';
@@ -2153,7 +2200,7 @@ function updatePlayerFoot(dt){
   rangePush(pt, 0.35);
   pushOut(pt, 0.35);
   if (player.shop){ player.x = pt.x; player.z = pt.z; }        // the shop interior is far outside the city bounds
-  else { player.x = clamp(pt.x, -HALF-30, HALF+30); player.z = clamp(pt.z, -HALF-30, HALF+30); }
+  else { player.x = clamp(pt.x, -WORLD, WORLD); player.z = clamp(pt.z, -WORLD, WORLD); }
   player.y = lerp(player.y, groundH(player.x, player.z), Math.min(1, dt*14));
   updateActions(dt);
   animateTargets(dt);
@@ -2237,7 +2284,7 @@ function updatePlayerCar(dt){
     if (h){ car.x += t.x - before.x; car.z += t.z - before.z; hit = true; }
   }
   if (hit){ const k = 1 - Math.min(1, dt*5); car.vx *= k; car.vz *= k; }
-  car.x = clamp(car.x, -HALF-30, HALF+30); car.z = clamp(car.z, -HALF-30, HALF+30);
+  car.x = clamp(car.x, -WORLD, WORLD); car.z = clamp(car.z, -WORLD, WORLD);
   const hx = Math.sin(car.h), hz = Math.cos(car.h);
   car.v = car.vx*hx + car.vz*hz;                                              // forward speed for the rest of the game
   // skid marks, tyre smoke and screech while sliding
@@ -2363,6 +2410,7 @@ renderer.setAnimationLoop(frame);
 
 Promise.all([parseCarModel(CAR_TYPES.c1), parseCarModel(CAR_TYPES.v60), parseWeapons(), parseRoster(), new Promise(res => loadModel(res))]).then(([,,,,gltf]) => {
   spawnCars();
+  buildCarPark();
   initWorldPeople(gltf);
   const g = $('go'); g.textContent = TOUCH ? 'Tap to play' : 'Click to play'; g.removeAttribute('disabled'); ready = true;
   updateSky(0); updateCamera(1); camPos.copy(camera.position);
